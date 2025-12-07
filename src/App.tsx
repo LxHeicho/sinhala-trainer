@@ -69,6 +69,12 @@ type Screen = {
 const MAX_NEW_CARDS_TO_LEARN = 5; 
 const ANSWER_DELAY_MS = 800; // Delay for correct answer auto-advance/feedback
 
+// NEW CONSTANTS for Full Review Mode
+const WEAK_CARD_BATCH_SIZE = 20; 
+const WEAK_CARD_MULTIPLIER = 3; 
+const FULL_REVIEW_ID = "full-review-mode"; // Special ID for the new session type
+
+
 /* =======================
    Utilities
 ======================= */
@@ -144,7 +150,7 @@ function calculateSM2(card: SRSCard, quality: 1 | 2 | 3 | 4) {
 }
 
 // Local Storage Keys
-const APP_STATE_KEY = "sinhalaTrainerAppState"; // Changed key for better isolation
+const APP_STATE_KEY = "sinhalaTrainerAppState";
 
 function loadAppState(): AppState {
   try {
@@ -435,13 +441,11 @@ function CategoryItem({
 ======================= */
 
 function App() {
-  // ⬅️ INITIALIZE STATE BY CALLING loadAppState FUNCTION
   const [state, setState] = useState<AppState>(loadAppState);
   const [screen, setScreen] = useState<Screen>({ key: "home", category: "" });
   const [session, setSession] = useState<Session | null>(null); 
 
   // 1. Load and Save State
-  // ⬅️ USE useEffect TO SAVE STATE WHENEVER THE 'state' OBJECT CHANGES
   useEffect(() => {
     saveAppState(state);
   }, [state]);
@@ -511,7 +515,7 @@ function App() {
     navigate("home");
   }, [navigate]);
   
-  // 4. Session Start Logic (Unified Queue)
+  // 4. Session Start Logic (Category Unified Queue)
   const startSession = useCallback((categoryId: string) => {
     const categoryStats = allCategoryStats[categoryId];
     if (!categoryStats || (categoryStats.reviewsDue + categoryStats.newCards) === 0) return;
@@ -543,6 +547,72 @@ function App() {
     
     navigate("review", categoryId); // Start on the Quiz/Review screen
   }, [allCategoryStats, state.sessionSize, navigate]);
+
+  // NEW: Session Start Logic for Full Prioritized Review
+  const startFullReviewSession = useCallback(() => {
+    
+    const today = new Date().getTime();
+    
+    // 1. Separate all cards into queues (due/new/learned)
+    const dueCards: CardData[] = [];
+    const newCards: CardData[] = [];
+    const learnedCards: CardData[] = []; // Learned/In-progress cards that are NOT due
+    
+    ALL_WORDS.forEach((word) => {
+        const srsCard = state.srs[word.id];
+        
+        if (srsCard && srsCard.due <= today) {
+            dueCards.push(word);
+        } else if (!srsCard) {
+            newCards.push(word);
+        } else {
+            learnedCards.push(word);
+        }
+    });
+
+    // 2. Identify Weakest Cards (highest lapses) from all reviewed cards (due + learned)
+    const allReviewedCards = [...dueCards, ...learnedCards];
+
+    // Sort by lapses (descending)
+    allReviewedCards.sort((a, b) => {
+        const lapsesA = state.srs[a.id]?.lapses || 0;
+        const lapsesB = state.srs[b.id]?.lapses || 0;
+        return lapsesB - lapsesA; // Highest lapses first (weakest)
+    });
+    
+    // Take the top N weakest cards
+    const weakestBatch = allReviewedCards.slice(0, WEAK_CARD_BATCH_SIZE);
+
+    // 3. Build the Master Study Queue
+    let studyQueue: CardData[] = [];
+    
+    // A. All Due Cards (must be reviewed)
+    studyQueue.push(...shuffle(dueCards));
+
+    // B. Weakest Cards (multiplied for higher frequency)
+    for (let i = 0; i < WEAK_CARD_MULTIPLIER; i++) {
+        studyQueue.push(...shuffle(weakestBatch));
+    }
+    
+    // C. A batch of New Cards (limit)
+    studyQueue.push(...shuffle(newCards).slice(0, MAX_NEW_CARDS_TO_LEARN));
+
+    // 4. Final Queue preparation
+    studyQueue = shuffle(studyQueue); // Final shuffle for variety
+    const totalCards = studyQueue.length;
+
+    if (totalCards === 0) return;
+
+    setSession({
+        studyQueue: studyQueue,
+        index: 0,
+        active: true,
+        totalCards: totalCards,
+        sessionCategory: FULL_REVIEW_ID, // Use the special ID
+    });
+    
+    navigate("review", FULL_REVIEW_ID); // Navigate to review screen with special ID
+  }, [state.srs, navigate]);
 
   // 5. SRS Update and Index Movement Logic
   const handleCardComplete = useCallback((wordId: string, quality: 1 | 2 | 3 | 4, _isNewCard: boolean, isPractice: boolean = false) => {
@@ -610,6 +680,11 @@ function App() {
 
   const activeCategoryLabel = useMemo(() => {
     const categoryId = screen.category || session?.sessionCategory;
+    
+    if (categoryId === FULL_REVIEW_ID) { // Handle the new full review mode
+        return "Full Review";
+    }
+    
     if (!categoryId) return "All";
     const cat = ALL_CATEGORIES.find(c => c.id === categoryId);
     return cat ? cat.label : categoryId.charAt(0).toUpperCase() + categoryId.slice(1);
@@ -639,6 +714,14 @@ function App() {
                 disabled={totalReviewsDue + totalNewCards === 0}
               >
                 Go to Categories to Study
+              </button>
+              {/* NEW BUTTON FOR FULL REVIEW MODE */}
+              <button
+                className="memBtn large"
+                onClick={startFullReviewSession}
+                disabled={totalReviewsDue + totalNewCards === 0 && Object.keys(state.srs).length === 0}
+              >
+                Catch-up Review (All Words)
               </button>
               <button
                 className="memBtn large"
@@ -699,7 +782,13 @@ function App() {
         }
         
         const studyCard = session.studyQueue[session.index];
-        const studyVocabPool = categoryVocabPools[session.sessionCategory] || ALL_WORDS;
+        const isFullReview = session.sessionCategory === FULL_REVIEW_ID;
+
+        // Use ALL_WORDS for distractors in Full Review mode, otherwise use the category pool
+        const studyVocabPool = isFullReview 
+            ? ALL_WORDS 
+            : (categoryVocabPools[session.sessionCategory] || ALL_WORDS);
+            
         const isNewCard = !state.srs[studyCard.id]; // Check if the card is a new card (has no SRS state)
         
         return (
