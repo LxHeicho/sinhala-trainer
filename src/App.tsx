@@ -4,292 +4,6 @@ import { SENTENCES } from "./data/sentences";
 import "./App.css";
 
 /* =======================
-   Injected CSS for Mobile Responsiveness and Slick Look
-======================= */
-
-const MobileStyles = () => (
-    <style>{`
-        /* Variables for easy color management */
-        :root {
-            --primary-color: #4A90E2; /* Blue */
-            --secondary-color: #805ad5; /* Purple */
-            --bg-color: #f7f9fc; /* Light Gray */
-            --card-bg: #ffffff;
-            --border-color: #eee;
-            --text-color: #333;
-            --muted-text: #666;
-            --success-color: #4CAF50;
-            --error-color: #E53935;
-            --shadow-color: rgba(0, 0, 0, 0.05);
-        }
-
-        * {
-            box-sizing: border-box;
-            /* Use system font for a native Safari feel */
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg-color);
-            min-height: 100vh; /* Full viewport height */
-        }
-
-        .memApp {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-            background-color: var(--bg-color);
-        }
-
-        /* Topbar Styling */
-        .memTopbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 15px; /* Adjusted padding */
-            background-color: var(--card-bg);
-            border-bottom: 1px solid var(--border-color);
-            box-shadow: 0 1px 3px var(--shadow-color);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-
-        .memBrand {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--secondary-color);
-            cursor: pointer;
-        }
-        
-        .memTopbarActions {
-            display: flex;
-            gap: 8px;
-        }
-
-        /* Main Content and Containers */
-        .memMain {
-            flex-grow: 1;
-            padding-top: 20px;
-        }
-
-        .memContainer {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .mobile-padding {
-            padding: 0 15px;
-        }
-
-        .memHeader {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--text-color);
-            margin-bottom: 20px;
-            padding: 0 15px; /* Padding for header consistency */
-        }
-        
-        /* Button Styling */
-        .memBtn {
-            padding: 10px 15px;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.2s, box-shadow 0.2s, transform 0.1s;
-            text-align: center;
-            white-space: nowrap;
-        }
-        
-        .memBtn:active {
-            transform: scale(0.98); /* Slick tap effect */
-        }
-
-        .memPrimary {
-            background-color: var(--primary-color);
-            color: white;
-        }
-
-        .memSecondary {
-            background-color: var(--secondary-color);
-            color: white;
-        }
-
-        .muted {
-            color: var(--muted-text);
-            background-color: transparent;
-        }
-
-        .memBtn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        /* Stats Grid */
-        .memStatsGrid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            margin-bottom: 30px;
-        }
-
-        .memStatBox {
-            background-color: var(--card-bg);
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 4px 8px var(--shadow-color); /* More prominent shadow */
-        }
-
-        .statLabel {
-            font-size: 0.8rem;
-            color: var(--muted-text);
-            margin-bottom: 5px;
-        }
-
-        .statValue {
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: var(--text-color);
-        }
-
-        /* Action Grid (Home Screen Buttons) */
-        .memActionGrid {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .mobile-large-btn {
-            width: 100%;
-            padding: 18px; /* Larger tap target */
-            font-size: 1.1rem;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        /* Category Items */
-        .memCategoryItem {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .categoryName {
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
-        /* Card Styling (Quiz/Sentence Screens) */
-        .memCard {
-            background-color: var(--card-bg);
-            border-radius: 16px; /* Rounded corners */
-            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .foreignWord {
-            font-size: 1.8rem;
-            font-weight: 700;
-            margin-bottom: 10px;
-            text-align: center;
-            color: var(--secondary-color);
-        }
-
-        /* Choices Grid (Multiple Choice / Word Bank) */
-        .memChoicesGrid {
-            display: grid;
-            grid-template-columns: 1fr; 
-            gap: 10px;
-            margin-top: 20px;
-        }
-
-        .choice {
-            padding: 15px; /* Large tap area */
-            font-size: 1rem;
-            background-color: #f0f4f7;
-            color: var(--text-color);
-            border: 1px solid #dcdfe4;
-        }
-
-        .choice.correct {
-            background-color: var(--success-color);
-            color: white;
-            border-color: var(--success-color);
-        }
-
-        .choice.wrong {
-            background-color: var(--error-color);
-            color: white;
-            border-color: var(--error-color);
-        }
-        
-        /* Sentence Builder Specifics */
-        .memSentenceCard .foreignWord {
-            color: var(--primary-color);
-            font-size: 1.4rem;
-        }
-
-        .sentenceTarget {
-            min-height: 60px; /* Taller target */
-            padding: 15px;
-            border: 2px dashed var(--secondary-color); /* Purple dashed border */
-            border-radius: 8px;
-            text-align: center;
-            font-size: 1.4rem;
-            font-weight: 500;
-            color: var(--text-color);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            line-height: 1.3;
-        }
-
-        .sentence-choices {
-            margin-top: 25px !important;
-        }
-        
-        .sentence-word-btn {
-            background-color: #e6e6fa; /* Light Lavender */
-            color: #6a5acd; /* Deeper Purple */
-            border: 1px solid #d4d4f8;
-            font-size: 0.95rem;
-            padding: 10px 15px;
-            flex-grow: 0;
-        }
-
-        /* Progress Bar */
-        .memProgress {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 15px;
-            padding: 0 15px;
-        }
-
-        /* Responsive adjustments for wider screens */
-        @media (min-width: 600px) {
-            .memChoicesGrid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .memStatsGrid {
-                grid-template-columns: repeat(4, 1fr);
-            }
-            .memMain {
-                padding-top: 40px;
-            }
-        }
-    `}</style>
-);
-
-
-/* =======================
    Types
 ======================= */
 
@@ -624,11 +338,11 @@ function SentenceQuizScreen({
                     </div>
                 )}
                 
-                <div className="memChoicesGrid mobile-stack sentence-choices" style={{ marginTop: '30px', display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px' }}>
+                <div className="memChoicesGrid sentence-choices" style={{ marginTop: '30px', display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px' }}>
                     {wordChoices.map((word, index) => (
                         <button
                             key={index}
-                            className={`choice memBtn mobile-choice sentence-word-btn`}
+                            className={`choice memBtn sentence-word-btn`}
                             onClick={() => handleWordClick(word)}
                             disabled={isCorrect !== null}
                         >
@@ -769,11 +483,11 @@ function QuizScreen({
                     Choose the correct Sinhala phonetic word:
                 </div>
 
-                <div className="memChoicesGrid mobile-stack" style={{ marginTop: '20px' }}>
+                <div className="memChoicesGrid" style={{ marginTop: '20px' }}>
                     {choices.map((choice) => (
                     <button
                         key={choice.id}
-                        className={`choice memBtn mobile-choice ${getChoiceClass(choice)}`}
+                        className={`choice memBtn ${getChoiceClass(choice)}`}
                         onClick={() => handleSelect(choice)}
                         disabled={!!selected}
                     >
@@ -815,20 +529,20 @@ function TopBar({
     totalDue: number;
   }) {
       return (
-          <div className="memTopbar mobile-topbar"> 
+          <div className="memTopbar"> 
               <div className="memBrand" onClick={() => onNavigate("home")}>
                   Sinhala Trainer
               </div>
               <div className="memTopbarActions">
                   <button
-                      className="memBtn small mobile-btn muted"
+                      className="memBtn small muted"
                       onClick={() => onNavigate("settings")} 
                       title="Settings"
                   >
                       ⚙️
                   </button>
                   <button
-                      className={`memBtn small memPrimary mobile-btn ${totalDue > 0 ? "active" : ""}`}
+                      className={`memBtn small memPrimary ${totalDue > 0 ? "active" : ""}`}
                       onClick={() => onNavigate("categories")} 
                       disabled={totalDue === 0}
                   >
@@ -857,7 +571,7 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
 }
 function StatBox({ label, value }: { label: string; value: React.ReactNode }) {
     return (
-        <div className="memStatBox mobile-stat-box">
+        <div className="memStatBox">
             <div className="statLabel">{label}</div>
             <div className="statValue">{value}</div>
         </div>
@@ -879,7 +593,7 @@ function CategoryItem({
       const totalCount = isSentence ? count : stats.reviewsDue + stats.newCards;
       
       return (
-          <div className="memCategoryItem mobile-cat-item">
+          <div className="memCategoryItem">
               <div className="categoryInfo">
                   <div className="categoryName large">{category.label}</div>
                   <div className="categoryCount muted">
@@ -889,7 +603,7 @@ function CategoryItem({
                   </div>
               </div>
               <button 
-                  className={`memBtn small memPrimary mobile-btn active`}
+                  className={`memBtn small memPrimary active`}
                   onClick={() => onStudy(category.id)}
               >
                   {isSentence ? `Practice (${count})` : `Study (${totalCount > 0 ? totalCount : 0})`}
@@ -904,9 +618,6 @@ function CategoryItem({
 ======================= */
 
 function App() {
-  // Inject mobile styles first
-  const mobileStyles = <MobileStyles />;
-
   const [state, setState] = useState<AppState>(loadAppState);
   const [screen, setScreen] = useState<Screen>({ key: "home", category: "" });
   
@@ -1203,43 +914,43 @@ function App() {
     switch (screen.key) {
       case "home":
         return (
-          <div className="memContainer homeScreen mobile-padding"> 
-            <div className="memHeader mobile-header">
+          <div className="memContainer homeScreen"> 
+            <div className="memHeader">
                 Sinhala Trainer Status
             </div>
-            <div className="memStatsGrid mobile-stats-grid"> 
+            <div className="memStatsGrid"> 
               <StatBox label="Reviews Due" value={totalReviewsDue} />
               <StatBox label="New Cards" value={totalNewCards} />
               <StatBox label="Total Reviews" value={state.totalReviews} />
               <StatBox label="Correct %" value={`${state.totalReviews > 0 ? ((state.correctReviews / state.totalReviews) * 100).toFixed(0) : 0}%`} />
             </div>
 
-            <div className="memActionGrid mobile-action-grid">
+            <div className="memActionGrid">
               
               {/* Only the section-based sentence quiz remains, restyled as main sentence button */}
               <button
-                className="memBtn large mobile-large-btn memSecondary"
+                className="memBtn large memSecondary"
                 onClick={() => navigate("sentence-categories")} 
               >
                 Sentence Builder (Sections)
               </button>
               
               <button
-                className="memBtn large memPrimary mobile-large-btn"
+                className="memBtn large memPrimary"
                 onClick={() => navigate("categories")}
                 disabled={totalReviewsDue + totalNewCards === 0}
               >
                 Go to Vocab Categories to Study
               </button>
               <button
-                className="memBtn large mobile-large-btn"
+                className="memBtn large"
                 onClick={startFullReviewSession}
                 disabled={totalReviewsDue + totalNewCards === 0 && Object.keys(state.srs).length === 0}
               >
                 Catch-up Review (All Words)
               </button>
               <button
-                className="memBtn large mobile-large-btn"
+                className="memBtn large"
                 onClick={() => navigate("practice")}
               >
                 Word Quiz Mode (Practice)
@@ -1265,8 +976,8 @@ function App() {
 
       case "categories":
         return (
-            <div className="memContainer mobile-padding">
-                <div className="memHeader mobile-header" style={{padding: 0}}>Vocab Categories</div>
+            <div className="memContainer">
+                <div className="memHeader" style={{padding: 0}}>Vocab Categories</div>
                 {ALL_CATEGORIES.map((cat) => (
                     <CategoryItem
                         key={cat.id}
@@ -1281,8 +992,8 @@ function App() {
       
       case "sentence-categories": 
         return (
-            <div className="memContainer mobile-padding">
-                <div className="memHeader mobile-header" style={{padding: 0}}>Sentence Builder Sections ({SENTENCES.length} Total)</div>
+            <div className="memContainer">
+                <div className="memHeader" style={{padding: 0}}>Sentence Builder Sections ({SENTENCES.length} Total)</div>
                 {SENTENCE_CATEGORIES_DATA.map((cat) => (
                     <CategoryItem
                         key={cat.id}
@@ -1308,13 +1019,12 @@ function App() {
                 : "Category Review";
                 
             return (
-                <div className="memContainer mobile-padding">
-                    {/* FIXED: Use sessionTitle here to remove TS6133 error */}
-                    <div className="memHeader mobile-header">{sessionTitle}</div> 
+                <div className="memContainer">
+                    <div className="memHeader">{sessionTitle}</div> 
                     <div className="memCard">
                         <div className="memCardContent">
                             <div className="foreignWord">Session Complete! 🎉</div>
-                            <button className="memBtn memPrimary mobile-large-btn" onClick={endSession}>
+                            <button className="memBtn memPrimary" onClick={endSession}>
                                 Back to Categories
                             </button>
                         </div>
@@ -1327,8 +1037,8 @@ function App() {
             const currentSession = session!;
             
             return (
-                <div className="memContainer mobile-padding">
-                    <div className="memHeader mobile-header">
+                <div className="memContainer">
+                    <div className="memHeader">
                         Word Review 
                         {isPracticeMode && " (Quiz Mode)"}
                     </div>
@@ -1359,12 +1069,12 @@ function App() {
             const returnDestination = "sentence-categories";
 
             return (
-                <div className="memContainer mobile-padding">
-                    <div className="memHeader mobile-header">Sentence Builder</div>
+                <div className="memContainer">
+                    <div className="memHeader">Sentence Builder</div>
                     <div className="memCard">
                         <div className="memCardContent">
                             <div className="foreignWord">Practice Complete! 🎉</div>
-                            <button className="memBtn memPrimary mobile-large-btn" onClick={() => navigate(returnDestination)}>
+                            <button className="memBtn memPrimary" onClick={() => navigate(returnDestination)}>
                                 Back to Sections
                             </button>
                         </div>
@@ -1377,8 +1087,8 @@ function App() {
         const sessionTitle = `Sentence Builder: ${sentenceSession!.sessionCategory}`;
 
         return (
-            <div className="memContainer mobile-padding">
-                <div className="memHeader mobile-header">
+            <div className="memContainer">
+                <div className="memHeader">
                     {sessionTitle}
                 </div>
                 <ProgressBar
@@ -1406,12 +1116,11 @@ function App() {
   
   return (
     <div className="memApp">
-      {mobileStyles}
       <TopBar
         onNavigate={navigate}
         totalDue={totalReviewsDue + totalNewCards}
       />
-      <div className="memMain mobile-main">{renderScreen()}</div>
+      <div className="memMain">{renderScreen()}</div>
     </div>
   );
 }
