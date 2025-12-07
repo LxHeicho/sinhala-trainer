@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Rounded square background -->
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="#0B0B0F"></rect>
+
+  <!-- Soft radial glow -->
+  <circle cx="512" cy="420" r="360" fill="url(#glow)"></circle>
+
+  <!-- Chat bubble -->
+  <path d="M292 330C292 264 346 210 412 210H612C678 210 732 264 732 330V520C732 586 678 640 612 640H476L392 712V640H412C346 640 292 586 292 520V330Z" fill="#FFFFFF" fill-opacity="0.95"></path>
+
+  <!-- Lotus / wave mark inside bubble -->
+  <path d="M512 300C468 342 450 382 450 420C450 471 490 510 512 520C534 510 574 471 574 420C574 382 556 342 512 300Z" fill="#0B0B0F"></path>
+  <path d="M426 458C462 420 496 406 512 402C528 406 562 420 598 458C578 486 546 512 512 520C478 512 446 486 426 458Z" fill="#0B0B0F"></path>
+
+  <defs>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 420) rotate(90) scale(360)">
+      <stop stop-color="#2D7DFF" stop-opacity="0.35"></stop>
+      <stop offset="1" stop-color="#0B0B0F" stop-opacity="0"></stop>
+    </radialGradient>
+  </defs>
+</svg>
