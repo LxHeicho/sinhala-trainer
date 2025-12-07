@@ -1,25 +1,12 @@
-// ==========================
-// App.tsx — Sinhala Trainer
-// Final SRS + Session Summary
-// ==========================
-
-import React, { useEffect, useMemo, useState } from "react";
-import { createClient, type User } from "@supabase/supabase-js";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { VOCAB } from "./data/vocab";
-import { SENTENCES } from "./data/sentences";
+// The 'SENTENCES' import was removed because it was unused (TS6133 fix)
 import "./App.css";
-
-/* =======================
-   Supabase setup
-======================= */
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-const supabase =
-  supabaseUrl && supabaseAnon ? createClient(supabaseUrl, supabaseAnon) : null;
 
 /* =======================
    Types
 ======================= */
+
 type VocabEntry = {
   id: string;
   category: string;
@@ -27,23 +14,18 @@ type VocabEntry = {
   phonetic: string;
 };
 
-type SentenceEntry = {
-  id: string;
-  english: string;
-  phonetic: string;
-  tokens: string[];
-  distractors?: string[];
-};
+type CardData = VocabEntry; 
 
+// SM-2 Spaced Repetition System Card Data
 type SRSCard = {
   id: string;
   reps: number;
   lapses: number;
   ease: number;
-  interval: number; // days
-  due: number; // timestamp
+  interval: number; // in days
+  due: number; // timestamp (ms)
   lastReviewed?: number;
-  strength: number; // 0–100
+  strength: number; // 0..100 (For UX display)
 };
 
 type SessionSize = 5 | 10 | 20 | "unlimited";
@@ -54,1935 +36,793 @@ type AppState = {
   lastStudyDay?: string;
   totalReviews: number;
   correctReviews: number;
-  selectedCategory: string | "all";
+  selectedCategory: string | "all"; 
   sessionSize: SessionSize;
-  autoSuggest: boolean;
-  cloudSyncEnabled: boolean;
 };
 
-type Screen =
-  | { key: "home" }
-  | { key: "review" }
-  | { key: "categories" }
-  | { key: "learn"; category: string | "all" }
-  | { key: "practice"; category: string }
-  | { key: "flashcards"; category: string | "all" }
-  | { key: "sentences" }
-  | { key: "stats" }
-  | { key: "settings" };
+type Session = {
+    studyQueue: CardData[];
+    index: number;
+    active: boolean;
+    totalCards: number;
+    sessionCategory: string; // Track which category this session is for
+};
 
-type SessionStats = {
-  mode: "learn" | "review";
-  category: string | "all";
-  target: SessionSize;
-  reviews: number;
-  correct: number;
+type ScreenKey =
+  | "home"
+  | "categories"
+  | "review" 
+  | "learn" 
+  | "practice" 
+  | "stats"
+  | "settings";
+
+type Screen = {
+  key: ScreenKey;
+  category?: string; // Tracks the active study category
 };
 
 /* =======================
    Constants
 ======================= */
-const STORAGE_KEY = "sinhala_trainer_v8"; // keep this stable now
 
-// “learned” threshold for words
-const LEARNED_THRESHOLD = 80;
-
-const DEFAULT_STATE: AppState = {
-  srs: {},
-  streak: 0,
-  lastStudyDay: undefined,
-  totalReviews: 0,
-  correctReviews: 0,
-  selectedCategory: "all",
-  sessionSize: 10,
-  autoSuggest: true,
-  cloudSyncEnabled: true,
-};
-
-const RATING_MAP = { again: 0, hard: 3, good: 4, easy: 5 } as const;
+const MAX_NEW_CARDS_TO_LEARN = 5; 
+const ANSWER_DELAY_MS = 800; // Delay for correct answer auto-advance/feedback
 
 /* =======================
-   Helpers
+   Utilities
 ======================= */
-function sm2Update(card: SRSCard, rating: keyof typeof RATING_MAP): SRSCard {
-  const q = RATING_MAP[rating];
-  const now = Date.now();
-  let { reps, lapses, ease, interval, strength } = card;
 
-  if (q < 3) {
-    // Again
-    reps = 0;
-    lapses += 1;
-    interval = 1;
-    ease = Math.max(1.3, ease - 0.2);
-    strength = Math.max(0, strength - 15);
+function shuffle<T>(array: T[]): T[] {
+  let currentIndex = array.length,
+    randomIndex;
+  const newArray = [...array];
+
+  while (currentIndex !== 0) {
+    randomIndex = Math.floor(Math.random() * currentIndex);
+    currentIndex--;
+    [newArray[currentIndex], newArray[randomIndex]] = [
+      newArray[randomIndex],
+      newArray[currentIndex],
+    ];
+  }
+  return newArray;
+}
+
+function generateChoices(word: CardData, vocab: CardData[]): CardData[] {
+    // Only use distractors that are in the same vocabulary pool (i.e., same category for a session)
+    const distractors = shuffle(vocab.filter((v) => v.id !== word.id));
+    const selectedDistractors = distractors.slice(0, 3); 
+    const options = shuffle([...selectedDistractors, word]);
+
+    return options;
+}
+
+
+// Quality: 1 (Again), 2 (Hard), 3 (Good), 4 (Easy)
+function calculateSM2(card: SRSCard, quality: 1 | 2 | 3 | 4) {
+  let { reps, lapses, ease, interval } = card;
+
+  if (quality >= 3) {
+    reps = reps + 1;
+    lapses = lapses;
+    ease = ease + (0.1 - (3 - quality) * (0.08 + (3 - quality) * 0.02));
+    ease = Math.max(1.3, ease); 
+
+    if (reps === 1) {
+      interval = 1;
+    } else if (reps === 2) {
+      interval = 6;
+    } else {
+      interval = Math.round(interval * ease);
+    }
   } else {
-    // Hard / Good / Easy
-    reps += 1;
-    if (reps === 1) interval = 1;
-    else if (reps === 2) interval = 3;
-    else interval = Math.round(interval * ease);
-
-    if (q === 3) ease = Math.max(1.3, ease - 0.15);
-    if (q === 5) ease += 0.1;
-
-    strength = Math.min(100, strength + (q === 5 ? 12 : q === 4 ? 8 : 4));
+    reps = 0;
+    lapses = lapses + 1;
+    interval = 1;
+    ease = ease - 0.2;
+    ease = Math.max(1.3, ease);
   }
 
+  const today = new Date().getTime();
+  const nextDue = today + interval * 24 * 60 * 60 * 1000;
+  const strength = Math.max(0, 100 - lapses * 15);
+
+  // Note: lastReviewed is optional in SRSCard type, but should be included here
+  const lastReviewed = today;
+
   return {
-    ...card,
+    id: card.id, // Ensure ID is carried over
     reps,
     lapses,
     ease,
     interval,
-    due: now + interval * 86400000,
-    lastReviewed: now,
+    due: nextDue,
+    lastReviewed,
     strength,
   };
 }
 
-function freshCard(id: string): SRSCard {
-  return {
-    id,
-    reps: 0,
-    lapses: 0,
-    ease: 2.5,
-    interval: 0,
-    due: Date.now(),
-    strength: 0,
-  };
-}
+// Local Storage Keys
+const APP_STATE_KEY = "sinhala_trainer_v2_state";
 
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
+function loadAppState(): AppState {
+  try {
+    const json = localStorage.getItem(APP_STATE_KEY);
+    if (json) {
+      const loadedState: AppState = JSON.parse(json);
 
-const shuffle = <T,>(arr: T[]): T[] => [...arr].sort(() => Math.random() - 0.5);
-const unique = <T,>(arr: T[]): T[] => Array.from(new Set(arr));
-const avg = (nums: number[]) =>
-  nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-
-function formatCategoryName(c: string) {
-  if (!c) return "";
-  if (c === "all") return "All words";
-  return c.charAt(0).toUpperCase() + c.slice(1);
-}
-
-/* =======================
-   Cloud Sync
-======================= */
-async function cloudSave(state: AppState, user: User | null) {
-  if (!supabase || !user) return;
-  await supabase.from("profiles").upsert({
-    id: user.id,
-    email: user.email,
-    state,
-    updated_at: new Date().toISOString(),
-  });
-}
-
-async function cloudLoad(user: User | null): Promise<AppState | null> {
-  if (!supabase || !user) return null;
-  const { data } = await supabase
-    .from("profiles")
-    .select("state")
-    .eq("id", user.id)
-    .single();
-  return (data?.state as AppState) ?? null;
-}
-
-function mergeStates(localState: AppState, cloudState: AppState): AppState {
-  // conservative: keep the "stronger" / more complete state for SRS + stats
-  const merged: AppState = { ...localState, ...cloudState };
-  const ids = unique([
-    ...Object.keys(localState.srs),
-    ...Object.keys(cloudState.srs),
-  ]);
-
-  const srs: Record<string, SRSCard> = {};
-  ids.forEach((id) => {
-    const l = localState.srs[id];
-    const c = cloudState.srs[id];
-    srs[id] = !l ? c : !c ? l : l.strength >= c.strength ? l : c;
-  });
-
-  merged.srs = srs;
-  merged.streak = Math.max(localState.streak, cloudState.streak);
-  merged.totalReviews = Math.max(
-    localState.totalReviews,
-    cloudState.totalReviews
-  );
-  merged.correctReviews = Math.max(
-    localState.correctReviews,
-    cloudState.correctReviews
-  );
-
-  return merged;
-}
-
-/* =======================
-   App Component
-======================= */
-
-function App() {
-  const [state, setState] = useState<AppState>(DEFAULT_STATE);
-  const [screen, setScreen] = useState<Screen>({ key: "home" });
-
-  const [user, setUser] = useState<User | null>(null);
-  const [_authLoading, setAuthLoading] = useState(true);
-
-  // Session controls
-  const [showSessionModal, setShowSessionModal] = useState(false);
-  const [pendingScreen, setPendingScreen] = useState<Screen | null>(null);
-  const [sessionChoice, setSessionChoice] = useState<SessionSize>(
-    state.sessionSize
-  );
-
-  // Per-session summary
-  const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
-  const [sessionCompleted, setSessionCompleted] = useState(false);
-
-  const vocab = VOCAB as VocabEntry[];
-
-  const categories = useMemo(() => {
-    const cats = unique(vocab.map((v) => v.category)).sort();
-    return ["all", ...cats] as const;
-  }, [vocab]);
-
-  /* =======================
-     Load Local + Auth
-  ======================= */
-  useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as AppState;
-        setState({ ...DEFAULT_STATE, ...parsed });
-        setSessionChoice(parsed.sessionSize ?? 10);
-      } catch {
-        setState(DEFAULT_STATE);
-      }
-    } else {
-      setState(DEFAULT_STATE);
-    }
-
-    if (!supabase) {
-      setAuthLoading(false);
-      return;
-    }
-
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null);
-      setAuthLoading(false);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => {
-      if (sub && sub.subscription) sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  /* =======================
-     Cloud Load on Login
-  ======================= */
-  useEffect(() => {
-    if (!user || !supabase) return;
-    (async () => {
-      const cloud = await cloudLoad(user);
-      if (cloud) {
-        setState((local) => {
-          const merged = mergeStates(local, cloud);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-          return merged;
-        });
-      }
-    })();
-  }, [user]);
-
-  /* =======================
-     Persist Local + Cloud Autosync
-  ======================= */
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (state.cloudSyncEnabled) cloudSave(state, user);
-  }, [state, user]);
-
-  /* =======================
-     Progress / Stats
-  ======================= */
-  const progressByCategory = useMemo(() => {
-    const map: Record<
-      string,
-      {
-        total: number;
-        learned: number;
-        inProgress: number;
-        unseen: number;
-        avgStrength: number;
-      }
-    > = {};
-
-    for (const v of vocab) {
-      if (!map[v.category]) {
-        map[v.category] = {
-          total: 0,
-          learned: 0,
-          inProgress: 0,
-          unseen: 0,
-          avgStrength: 0,
-        };
-      }
-      map[v.category].total += 1;
-
-      const s = state.srs[v.id]?.strength ?? 0;
-      map[v.category].avgStrength += s;
-
-      if (s >= LEARNED_THRESHOLD) map[v.category].learned += 1;
-      else if (s > 0) map[v.category].inProgress += 1;
-      else map[v.category].unseen += 1;
-    }
-
-    for (const c of Object.keys(map)) {
-      map[c].avgStrength = Math.round(map[c].avgStrength / map[c].total);
-    }
-
-    return map;
-  }, [vocab, state.srs]);
-
-  const overallProgress = useMemo(() => {
-    const strengths = vocab.map((v) => state.srs[v.id]?.strength ?? 0);
-    const learned = strengths.filter((s) => s >= LEARNED_THRESHOLD).length;
-    const inProgress = strengths.filter(
-      (s) => s > 0 && s < LEARNED_THRESHOLD
-    ).length;
-    const unseen = strengths.filter((s) => s === 0).length;
-
-    return {
-      learned,
-      total: strengths.length,
-      avgStrength: Math.round(avg(strengths)),
-      inProgress,
-      unseen,
-    };
-  }, [vocab, state.srs]);
-
-  /* =======================
-     Session Suggestion
-  ======================= */
-  function suggestedSessionSize(): SessionSize {
-    const hour = new Date().getHours();
-    const accuracy =
-      state.totalReviews === 0
-        ? 100
-        : (state.correctReviews / state.totalReviews) * 100;
-
-    if (accuracy < 60) return 5;
-    if (hour >= 21) return 5;
-    if (overallProgress.avgStrength < 45) return 10;
-    return 20;
-  }
-
-  function openWithSession(target: Screen) {
-    // If this is a learn session and the category is already complete, short-circuit
-    if (target.key === "learn" && target.category !== "all") {
-      const catStats = progressByCategory[target.category];
-      if (catStats && catStats.learned === catStats.total) {
-        return;
-      }
-    }
-
-    const suggestion = state.autoSuggest
-      ? suggestedSessionSize()
-      : state.sessionSize;
-    setSessionChoice(suggestion);
-    setPendingScreen(target);
-    setShowSessionModal(true);
-  }
-
-  function startSession() {
-    if (!pendingScreen) return;
-    // prepare session stats for learn/review only
-    if (pendingScreen.key === "learn" || pendingScreen.key === "review") {
-      setSessionStats({
-        mode: pendingScreen.key,
-        category:
-          pendingScreen.key === "review" ? "all" : pendingScreen.category,
-        target: sessionChoice,
-        reviews: 0,
-        correct: 0,
-      });
-      setSessionCompleted(false);
-    } else {
-      setSessionStats(null);
-      setSessionCompleted(false);
-    }
-
-    setState((s) => ({ ...s, sessionSize: sessionChoice }));
-    setShowSessionModal(false);
-    setScreen(pendingScreen);
-    setPendingScreen(null);
-  }
-
-  /* =======================
-     QUEUES (SRS Option B)
-======================= */
-
-  // REVIEW — all words that have ever been seen (strength > 0),
-  // sorted weakest → strongest, limited by sessionSize.
-  const reviewQueue = useMemo(() => {
-    const pool = vocab.filter((v) => (state.srs[v.id]?.strength ?? 0) > 0);
-    const sorted = [...pool].sort(
-      (a, b) =>
-        (state.srs[a.id]?.strength ?? 0) -
-        (state.srs[b.id]?.strength ?? 0)
-    );
-    const limit =
-      state.sessionSize === "unlimited" ? sorted.length : state.sessionSize;
-    return sorted.slice(0, limit);
-  }, [vocab, state.srs, state.sessionSize]);
-
-  // PRACTICE — unlimited, per category, all words in that category.
-  const practiceQueue = useMemo(() => {
-    if (screen.key !== "practice") return [] as VocabEntry[];
-    return shuffle(vocab.filter((v) => v.category === screen.category));
-  }, [screen, vocab]);
-
-  // LEARN — per category, only words with strength < LEARNED_THRESHOLD,
-  // bounded by sessionSize.
-  const learnQueue = useMemo(() => {
-    if (screen.key !== "learn") return [] as VocabEntry[];
-
-    const base =
-      screen.category === "all"
-        ? vocab
-        : vocab.filter((v) => v.category === screen.category);
-
-    const toLearn = base.filter(
-      (v) => (state.srs[v.id]?.strength ?? 0) < LEARNED_THRESHOLD
-    );
-    const shuffled = shuffle(toLearn);
-    const limit =
-      state.sessionSize === "unlimited" ? shuffled.length : state.sessionSize;
-    return shuffled.slice(0, limit);
-  }, [screen, vocab, state.srs, state.sessionSize]);
-
-  /* =======================
-     Review State
-  ======================= */
-  const [reviewIndex, setReviewIndex] = useState(0);
-  const [reviewFlip, setReviewFlip] = useState(false);
-
-  const currentReview =
-    screen.key === "practice"
-      ? practiceQueue[reviewIndex]
-      : screen.key === "learn"
-      ? learnQueue[reviewIndex]
-      : screen.key === "review"
-      ? reviewQueue[reviewIndex]
-      : undefined;
-
-  useEffect(() => {
-    // reset index & flip when queue or screen changes
-    setReviewIndex(0);
-    setReviewFlip(false);
-    setSessionCompleted(false);
-  }, [reviewQueue.length, practiceQueue.length, learnQueue.length, screen.key]);
-
-  /* =======================
-     Grade Logic (Option B)
-  ======================= */
-  function gradeCurrent(rating: keyof typeof RATING_MAP) {
-    if (!currentReview) return;
-    if (screen.key === "practice") {
-      // practice does not affect SRS
-      const total =
-        screen.key === "practice" ? practiceQueue.length : 0;
-      const nextIndex =
-        total === 0 ? 0 : Math.min(reviewIndex + 1, total);
-      setReviewIndex(nextIndex);
-      setReviewFlip(false);
-      return;
-    }
-
-    // Update AppState (SRS, streak, global stats)
-    setState((prev) => {
-      const prevCard = prev.srs[currentReview.id] ?? freshCard(currentReview.id);
-      const nextCard = sm2Update(prevCard, rating);
-
-      const tKey = todayKey();
-      let streak = prev.streak;
-
-      // Only count streak if at least one successful review that day
-      if (rating !== "again") {
-        if (prev.lastStudyDay !== tKey) {
-          const y = new Date();
-          y.setDate(y.getDate() - 1);
-          const yKey = `${y.getFullYear()}-${
-            y.getMonth() + 1
-          }-${y.getDate()}`;
-          streak = prev.lastStudyDay === yKey ? streak + 1 : 1;
+      for (const id in loadedState.srs) {
+        loadedState.srs[id].due = Number(loadedState.srs[id].due);
+        if (loadedState.srs[id].lastReviewed) {
+          loadedState.srs[id].lastReviewed = Number(loadedState.srs[id].lastReviewed);
         }
       }
-
-      return {
-        ...prev,
-        srs: { ...prev.srs, [currentReview.id]: nextCard },
-        streak,
-        lastStudyDay: rating === "again" ? prev.lastStudyDay : tKey,
-        totalReviews: prev.totalReviews + 1,
-        correctReviews: prev.correctReviews + (rating === "again" ? 0 : 1),
-      };
-    });
-
-    // Update session stats (per-session summary)
-    setSessionStats((prev) => {
-      if (!prev) return prev;
-      const newReviews = prev.reviews + 1;
-      const newCorrect = prev.correct + (rating === "again" ? 0 : 1);
-      return { ...prev, reviews: newReviews, correct: newCorrect };
-    });
-
-    // Move index & possibly end session
-    const total =
-      screen.key === "learn"
-        ? learnQueue.length
-        : screen.key === "review"
-        ? reviewQueue.length
-        : 0;
-
-    const nextIndex =
-      total === 0 ? 0 : Math.min(reviewIndex + 1, total);
-
-    setReviewIndex(nextIndex);
-    setReviewFlip(false);
-
-    // strict: session ends when we've walked the entire queue once
-    if (nextIndex >= total) {
-      setSessionCompleted(true);
+      return { ...defaultAppState, ...loadedState };
     }
+  } catch (e) {
+    console.error("Could not load state from local storage", e);
   }
+  return defaultAppState;
+}
 
-  /* =======================
-     Sentence Lab
-  ======================= */
-  const sentenceData = SENTENCES as SentenceEntry[];
-  const [sentenceIndex, setSentenceIndex] = useState(0);
-  const currentSentence = sentenceData[sentenceIndex];
+function saveAppState(state: AppState) {
+  try {
+    localStorage.setItem(APP_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error("Could not save state to local storage", e);
+  }
+}
 
-  const [pool, setPool] = useState<string[]>([]);
-  const [answer, setAnswer] = useState<string[]>([]);
-  const [sentenceResult, setSentenceResult] = useState<
-    null | "correct" | "wrong"
-  >(null);
+/* =======================
+   Default State & Data
+======================= */
+
+const defaultAppState: AppState = {
+  srs: {},
+  streak: 0,
+  totalReviews: 0,
+  correctReviews: 0,
+  selectedCategory: "all",
+  sessionSize: 10,
+  lastStudyDay: undefined,
+};
+
+const ALL_WORDS: CardData[] = VOCAB;
+const ALL_CATEGORIES: { id: string; label: string }[] = [
+  ...new Set(VOCAB.map((v) => v.category)),
+].map((cat) => ({ id: cat, label: cat.charAt(0).toUpperCase() + cat.slice(1) }));
+
+/* =======================
+   Components
+======================= */
+
+// --- Quiz Screen (Multiple Choice) - Used for Review and Practice ---
+function QuizScreen({
+  word,
+  vocabPool, // Pool of words to draw distractors from (usually the current category)
+  onAnswer,
+  onSkip,
+  srsCard,
+  isPracticeMode, 
+  isNewCard, // New prop to differentiate new vs. review cards
+}: {
+  word: CardData;
+  vocabPool: CardData[];
+  onAnswer: (quality: 1 | 2 | 3 | 4) => void;
+  onSkip: () => void;
+  srsCard: SRSCard | null;
+  isPracticeMode: boolean;
+  isNewCard: boolean;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [choices, setChoices] = useState<CardData[]>([]);
+  // NEW state: Controls visibility of the manual "Next" button after a wrong answer
+  const [showNextButton, setShowNextButton] = useState(false); 
 
   useEffect(() => {
-    if (!currentSentence) {
-      setPool([]);
-      setAnswer([]);
-      setSentenceResult(null);
-      return;
+    // Re-generate choices when the word changes
+    setChoices(generateChoices(word, vocabPool));
+    setSelected(null);
+    setShowNextButton(false); // Reset next button state
+  }, [word, vocabPool]);
+
+  function handleSelect(choice: CardData) {
+    if (selected) return;
+
+    setSelected(choice.id);
+
+    const isCorrect = choice.id === word.id;
+    // Determine SM-2 quality score: 3 (Good) for correct, 1 (Again) for incorrect
+    const quality = isCorrect ? 3 : 1; 
+
+    // Apply delay for feedback visibility
+    setTimeout(() => {
+        if (isCorrect) {
+            // Correct answer: auto-advance
+            onAnswer(quality); 
+        } else {
+            // Incorrect answer: show the next button for manual advance
+            setShowNextButton(true); 
+        }
+    }, ANSWER_DELAY_MS); 
+  }
+  
+  // New function to handle the manual click after a wrong answer
+  function handleNext() {
+      // For a wrong answer, the quality is always 1 (lapsed)
+      onAnswer(1); 
+  }
+
+  function getChoiceClass(choice: CardData) {
+    if (!selected) return "";
+    
+    if (choice.id === word.id) {
+      return "correct"; 
     }
 
-    const combined = shuffle([
-      ...currentSentence.tokens,
-      ...(currentSentence.distractors ?? []),
-    ]);
-
-    setPool(combined);
-    setAnswer([]);
-    setSentenceResult(null);
-  }, [currentSentence?.id]);
-
-  function onDragStart(
-    e: React.DragEvent,
-    word: string,
-    from: "pool" | "answer"
-  ) {
-    e.dataTransfer.setData("word", word);
-    e.dataTransfer.setData("from", from);
-  }
-
-  function allowDrop(e: React.DragEvent) {
-    e.preventDefault();
-  }
-
-  function moveWord(word: string, from: "pool" | "answer") {
-    if (from === "pool") {
-      setPool((p) => p.filter((w) => w !== word));
-      setAnswer((a) => [...a, word]);
-    } else {
-      setAnswer((a) => a.filter((w) => w !== word));
-      setPool((p) => [...p, word]);
+    if (choice.id === selected && choice.id !== word.id) {
+      return "wrong"; 
     }
-    setSentenceResult(null);
+
+    return selected ? "disabled" : ""; 
   }
 
-  function dropTo(target: "pool" | "answer", e: React.DragEvent) {
-    e.preventDefault();
-    const word = e.dataTransfer.getData("word");
-    const from = e.dataTransfer.getData("from") as "pool" | "answer";
-    if (!word || from === target) return;
-    moveWord(word, from);
-  }
+  const headerLabel = isPracticeMode 
+    ? "Quiz Mode" 
+    : isNewCard 
+      ? "Learning Phase"
+      : word.category.charAt(0).toUpperCase() + word.category.slice(1);
 
-  function checkSentence() {
-    if (!currentSentence) return;
-    const correct = currentSentence.tokens.join(" ").trim();
-    const user = answer.join(" ").trim();
-    setSentenceResult(user === correct ? "correct" : "wrong");
-  }
+  const answerWasWrong = selected !== null && selected !== word.id;
 
-  /* =======================
-     Weak / Strong lists
-  ======================= */
-  const weakWords = useMemo(
-    () =>
-      vocab
-        .filter(
-          (v) =>
-            (state.srs[v.id]?.strength ?? 0) > 0 &&
-            (state.srs[v.id]?.strength ?? 0) < LEARNED_THRESHOLD
-        )
-        .sort(
-          (a, b) =>
-            (state.srs[a.id]?.strength ?? 0) -
-            (state.srs[b.id]?.strength ?? 0)
-        )
-        .slice(0, 25)
-        .map((v) => ({
-          ...v,
-          strength: state.srs[v.id]?.strength ?? 0,
-        })),
-    [vocab, state.srs]
-  );
-
-  const strongWords = useMemo(
-    () =>
-      vocab
-        .filter((v) => (state.srs[v.id]?.strength ?? 0) >= LEARNED_THRESHOLD)
-        .sort(
-          (a, b) =>
-            (state.srs[b.id]?.strength ?? 0) -
-            (state.srs[a.id]?.strength ?? 0)
-        )
-        .slice(0, 25)
-        .map((v) => ({
-          ...v,
-          strength: state.srs[v.id]?.strength ?? 0,
-        })),
-    [vocab, state.srs]
-  );
-
-  const showBack = screen.key !== "home";
-
-  /* =======================
-     MAIN UI
-  ======================= */
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand" onClick={() => setScreen({ key: "home" })}>
-          <div className="logoDot" />
-          Sinhala Trainer
+    <div className="memCard">
+      <div className="memCardHeader">
+        <span className="muted small">{headerLabel}</span>
+        {srsCard && !isPracticeMode && ( // Only show SRS stats in Review Mode
+          <span className="muted small" style={{ marginLeft: 10 }}>
+            Lapses: {srsCard.lapses} | Ease: {srsCard.ease.toFixed(2)}
+          </span>
+        )}
+      </div>
+
+      <div className="memCardContent">
+        <div className="foreignWord large">{word.english}</div>
+        <div className="foreignMeaning muted">
+          Choose the correct Sinhala phonetic word:
         </div>
-        <div className="topRight">
-          {showBack && (
+
+        <div className="memChoicesGrid" style={{ marginTop: '20px' }}>
+            {choices.map((choice) => (
             <button
-              className="iconBtn"
-              onClick={() => {
-                // simple back: go home
-                setScreen({ key: "home" });
-                setSessionCompleted(false);
-              }}
+                key={choice.id}
+                className={`choice memBtn ${getChoiceClass(choice)}`}
+                onClick={() => handleSelect(choice)}
+                disabled={!!selected}
             >
-              Home
+                {choice.phonetic}
             </button>
-          )}
-          <button
-            className="iconBtn subtle"
-            onClick={() => setScreen({ key: "stats" })}
-          >
-            Stats
-          </button>
+            ))}
         </div>
-      </header>
 
-      <main className="main">
-        {/* HOME */}
-        {screen.key === "home" && (
-          <HomeScreen
-            streak={state.streak}
-            overall={overallProgress}
-            progressByCategory={progressByCategory}
-            onDailyReview={() => openWithSession({ key: "review" })}
-            onCategories={() => setScreen({ key: "categories" })}
-            onSentenceLab={() => setScreen({ key: "sentences" })}
-            onFlashcards={() =>
-              setScreen({
-                key: "flashcards",
-                category: state.selectedCategory,
-              })
-            }
-            onStats={() => setScreen({ key: "stats" })}
-            onSettings={() => setScreen({ key: "settings" })}
-          />
-        )}
-
-        {/* CATEGORIES */}
-        {screen.key === "categories" && (
-          <CategoriesScreen
-            categories={categories}
-            progressByCategory={progressByCategory}
-            srs={state.srs}
-            vocab={vocab}
-            onLearn={(c) => {
-              setState((s) => ({ ...s, selectedCategory: c }));
-              openWithSession({ key: "learn", category: c });
-            }}
-            onPractice={(c) => {
-              setReviewFlip(false);
-              setReviewIndex(0);
-              setSessionCompleted(false);
-              setScreen({ key: "practice", category: c });
-            }}
-          />
-        )}
-
-        {/* LEARN / REVIEW / PRACTICE */}
-        {(screen.key === "learn" ||
-          screen.key === "review" ||
-          screen.key === "practice") && (
-          <section className="panel">
-            <div className="panelHead">
-              <div className="panelHeadLeft">
-                <h2>
-                  {screen.key === "review" && "Review all learnt words"}
-                  {screen.key === "learn" &&
-                    `Learn • ${formatCategoryName(
-                      screen.category === "all"
-                        ? "all"
-                        : screen.category
-                    )}`}
-                  {screen.key === "practice" &&
-                    `Practice • ${formatCategoryName(screen.category)}`}
-                </h2>
-                {screen.key !== "practice" && (
-                  <button
-                    className="btn ghost smallBtn"
-                    onClick={() => {
-                      setScreen({ key: "categories" });
-                      setSessionCompleted(false);
-                    }}
-                  >
-                    Back
-                  </button>
-                )}
-              </div>
-
-              <ProgressBar
-                done={
-                  sessionCompleted
-                    ? (screen.key === "learn"
-                        ? learnQueue.length
-                        : screen.key === "review"
-                        ? reviewQueue.length
-                        : practiceQueue.length)
-                    : reviewIndex
-                }
-                total={
-                  screen.key === "practice"
-                    ? practiceQueue.length
-                    : screen.key === "learn"
-                    ? learnQueue.length
-                    : reviewQueue.length
-                }
-              />
+        {selected && (
+            <div className={`memPracticeResult ${selected === word.id ? "ok" : "bad"}`}>
+            {selected === word.id
+                ? "Correct! 🎉" + (isPracticeMode ? "" : " Scheduling for longer.")
+                : `Incorrect. The correct word was: ${word.phonetic}`}
             </div>
-
-            {/* Session summary for learn & review */}
-            {(screen.key === "learn" || screen.key === "review") &&
-              sessionCompleted &&
-              sessionStats && (
-                <SessionSummary
-                  stats={sessionStats}
-                  onBackToCategories={() => {
-                    setScreen({ key: "categories" });
-                    setSessionCompleted(false);
-                  }}
-                  onContinue={() => {
-                    // restart another session from same screen
-                    openWithSession(screen);
-                  }}
-                />
-              )}
-
-            {/* Flashcard flow */}
-            {!sessionCompleted && (
-              <>
-                {!currentReview ? (
-                  <EmptyBlock
-                    title="No words"
-                    subtitle={
-                      screen.key === "review"
-                        ? "You haven't learned any words yet."
-                        : "Nothing available in this mode."
-                    }
-                    actionLabel="Back to Categories"
-                    onAction={() => setScreen({ key: "categories" })}
-                  />
-                ) : (
-                  <Flashcard
-                    entry={currentReview}
-                    flip={reviewFlip}
-                    onFlip={() => setReviewFlip((f) => !f)}
-                    strength={state.srs[currentReview.id]?.strength ?? 0}
-                    onGrade={gradeCurrent}
-                    isPractice={screen.key === "practice"}
-                    onRestartPractice={() => {
-                      setReviewIndex(0);
-                      setReviewFlip(false);
-                    }}
-                  />
-                )}
-              </>
-            )}
-          </section>
         )}
-
-        {/* FLASHCARDS */}
-        {screen.key === "flashcards" && (
-          <section className="panel">
-            <div className="panelHead">
-              <div className="panelHeadLeft">
-                <h2>Flashcards</h2>
-                <button
-                  className="btn ghost smallBtn"
-                  onClick={() => setScreen({ key: "categories" })}
-                >
-                  Back
-                </button>
-              </div>
-            </div>
-
-            <BrowseFlashcards
-              vocab={vocab}
-              selectedCategory={screen.category}
-              srs={state.srs}
-            />
-          </section>
+        
+        {/* MANUAL ADVANCEMENT BUTTON */}
+        {showNextButton && answerWasWrong && (
+            <button className="memBtn memPrimary" onClick={handleNext} style={{ marginTop: '20px' }}>
+                Got It / Next Card
+            </button>
         )}
+      </div>
 
-        {/* SENTENCE LAB */}
-        {screen.key === "sentences" && (
-          <section className="panel">
-            <div className="panelHead">
-              <div className="panelHeadLeft">
-                <h2>Sentence Lab</h2>
-                <button
-                  className="btn ghost smallBtn"
-                  onClick={() => setScreen({ key: "home" })}
-                >
-                  Back
-                </button>
-              </div>
-              {sentenceData.length > 0 && (
-                <div className="muted small">
-                  {sentenceIndex + 1}/{sentenceData.length}
-                </div>
-              )}
-            </div>
-
-            {!currentSentence ? (
-              <EmptyBlock
-                title="No sentences"
-                subtitle="Add entries in sentences.ts"
-                actionLabel="Go Home"
-                onAction={() => setScreen({ key: "home" })}
-              />
-            ) : (
-              <SentenceCard
-                currentSentence={currentSentence}
-                pool={pool}
-                answer={answer}
-                sentenceResult={sentenceResult}
-                onDragStart={onDragStart}
-                allowDrop={allowDrop}
-                dropTo={dropTo}
-                onChipClick={moveWord}
-                checkSentence={checkSentence}
-                next={() =>
-                  setSentenceIndex((i) => (i + 1) % sentenceData.length)
-                }
-                reset={() => {
-                  setAnswer([]);
-                  setPool(
-                    shuffle([
-                      ...currentSentence.tokens,
-                      ...(currentSentence.distractors ?? []),
-                    ])
-                  );
-                  setSentenceResult(null);
-                }}
-              />
-            )}
-          </section>
-        )}
-
-        {/* STATS */}
-        {screen.key === "stats" && (
-          <StatsScreen
-            overallProgress={overallProgress}
-            progressByCategory={progressByCategory}
-            weakWords={weakWords}
-            strongWords={strongWords}
-            vocab={vocab}
-            srs={state.srs}
-            categories={categories.filter((c) => c !== "all")}
-            onBack={() => setScreen({ key: "home" })}
-          />
-        )}
-
-        {/* SETTINGS */}
-        {screen.key === "settings" && (
-          <SettingsScreen
-            state={state}
-            setState={setState}
-            onReset={() => {
-              localStorage.removeItem(STORAGE_KEY);
-              setState(DEFAULT_STATE);
-              setScreen({ key: "home" });
-            }}
-          />
-        )}
-      </main>
-
-      {showSessionModal && (
-        <SessionModal
-          suggested={suggestedSessionSize()}
-          choice={sessionChoice}
-          autoSuggest={state.autoSuggest}
-          onChangeChoice={setSessionChoice}
-          onToggleAutoSuggest={(v: boolean) =>
-            setState((s) => ({ ...s, autoSuggest: v }))
-          }
-          onCancel={() => {
-            setShowSessionModal(false);
-            setPendingScreen(null);
-          }}
-          onConfirm={startSession}
-        />
-      )}
+      <div className="memCardFooter">
+        {/* Disable skip button if waiting for manual click or initial selection */}
+        <button className="memBtn muted small" onClick={onSkip} disabled={!!selected || showNextButton}>
+          {isPracticeMode ? "Next Random" : "Skip"}
+        </button>
+      </div>
     </div>
   );
 }
 
-/* =======================
-   HOME
-======================= */
+// --- Utility Components (Unchanged) ---
 
-function HomeScreen({
-  streak,
-  overall,
-  progressByCategory,
-  onDailyReview,
-  onCategories,
-  onSentenceLab,
-  onFlashcards,
-  onStats,
-  onSettings,
+function TopBar({
+  onNavigate,
+  totalDue,
 }: {
-  streak: number;
-  overall: {
-    learned: number;
-    total: number;
-    avgStrength: number;
-    inProgress: number;
-    unseen: number;
-  };
-  progressByCategory: Record<
-    string,
-    {
-      total: number;
-      learned: number;
-      inProgress: number;
-      unseen: number;
-      avgStrength: number;
-    }
-  >;
-  onDailyReview: () => void;
-  onCategories: () => void;
-  onSentenceLab: () => void;
-  onFlashcards: () => void;
-  onStats: () => void;
-  onSettings: () => void;
+  onNavigate: (key: ScreenKey) => void;
+  totalDue: number;
 }) {
-  const pct = Math.round((overall.learned / Math.max(1, overall.total)) * 100);
-
   return (
-    <section className="home">
-      <div className="hero">
-        <div className="heroTop">
-          <div>
-            <h1>Speak Sinhala</h1>
-            <p className="muted">Train core vocab for real conversations</p>
-          </div>
-          <div className="streakPill">🔥 {streak}-day streak</div>
-        </div>
-
-        <div className="heroStats">
-          <HeroStat
-            label="Learned"
-            value={`${pct}%`}
-            sub={`${overall.learned}/${overall.total} words`}
-          />
-          <HeroStat
-            label="In progress"
-            value={overall.inProgress}
-            sub="Partially learned"
-          />
-          <HeroStat
-            label="Unseen"
-            value={overall.unseen}
-            sub="Not reviewed yet"
-          />
-        </div>
+    <div className="memTopbar">
+      <div className="memBrand" onClick={() => onNavigate("home")}>
+        Sinhala Trainer
       </div>
-
-      <div className="grid">
-        <MenuCard
-          title="Review"
-          subtitle="All words you've started"
-          cta="Start"
-          onClick={onDailyReview}
-        />
-        <MenuCard
-          title="Categories"
-          subtitle="Learn or practice topics"
-          cta="Open"
-          onClick={onCategories}
-        />
-        <MenuCard
-          title="Sentence Lab"
-          subtitle="Build Sinhala sentences"
-          cta="Train"
-          onClick={onSentenceLab}
-        />
-        <MenuCard
-          title="Flashcards"
-          subtitle="Browse vocabulary"
-          cta="Browse"
-          onClick={onFlashcards}
-        />
-        <MenuCard
-          title="Stats"
-          subtitle="Progress & strengths"
-          cta="View"
-          onClick={onStats}
-        />
-        <MenuCard
+      <div className="memTopbarActions">
+        <button
+          className="memBtn small"
+          onClick={() => onNavigate("settings")}
           title="Settings"
-          subtitle="Study preferences"
-          cta="Edit"
-          onClick={onSettings}
-        />
-      </div>
-
-      <div className="panel slim">
-        <div className="panelHead">
-          <h2>Category progress</h2>
-        </div>
-
-        <div className="catProgressGrid">
-          {Object.keys(progressByCategory).map((c) => {
-            const p = progressByCategory[c];
-            const pPct = Math.round((p.learned / p.total) * 100);
-
-            return (
-              <div className="catProgressTile" key={c}>
-                <div className="catTileTop">
-                  <div className="catName">{formatCategoryName(c)}</div>
-                  <div className="muted small">{pPct}% learned</div>
-                </div>
-                <MiniBar pct={pPct} />
-                <div className="muted small">
-                  Learned: {p.learned} • In progress: {p.inProgress} • Unseen:{" "}
-                  {p.unseen}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function HeroStat({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: React.ReactNode;
-  sub: string;
-}) {
-  return (
-    <div className="heroStat">
-      <div className="muted small">{label}</div>
-      <div className="heroValue">{value}</div>
-      <div className="muted small">{sub}</div>
-    </div>
-  );
-}
-
-function MenuCard({
-  title,
-  subtitle,
-  cta,
-  onClick,
-}: {
-  title: string;
-  subtitle: string;
-  cta: string;
-  onClick: () => void;
-}) {
-  return (
-    <button className="menuCard" onClick={onClick}>
-      <div className="menuTitle">{title}</div>
-      <div className="menuSubtitle">{subtitle}</div>
-      <div className="menuCta">{cta} →</div>
-    </button>
-  );
-}
-
-/* =======================
-   Categories Screen
-======================= */
-
-function CategoriesScreen({
-  categories,
-  progressByCategory,
-  srs,
-  vocab,
-  onLearn,
-  onPractice,
-}: {
-  categories: readonly ("all" | string)[];
-  progressByCategory: Record<
-    string,
-    {
-      total: number;
-      learned: number;
-      inProgress: number;
-      unseen: number;
-      avgStrength: number;
-    }
-  >;
-  srs: Record<string, SRSCard>;
-  vocab: VocabEntry[];
-  onLearn: (c: string) => void;
-  onPractice: (c: string) => void;
-}) {
-  return (
-    <section className="panel">
-      <div className="panelHead">
-        <div className="panelHeadLeft">
-          <h2>Categories</h2>
-        </div>
-        <p className="muted small">
-          Learn with SRS or practice freely by topic.
-        </p>
-      </div>
-
-      <div className="catGrid">
-        {categories
-          .filter((c) => c !== "all")
-          .map((c) => {
-            const key = String(c);
-            const p = progressByCategory[key];
-            const pct = p ? Math.round((p.learned / p.total) * 100) : 0;
-
-            const words = vocab.filter((v) => v.category === key);
-            const learnedWords = words.filter(
-              (v) => (srs[v.id]?.strength ?? 0) >= LEARNED_THRESHOLD
-            );
-            const inProgressWords = words.filter(
-              (v) =>
-                (srs[v.id]?.strength ?? 0) > 0 &&
-                (srs[v.id]?.strength ?? 0) < LEARNED_THRESHOLD
-            );
-            const unseenWords = words.filter(
-              (v) => (srs[v.id]?.strength ?? 0) === 0
-            );
-
-            const done =
-              words.length > 0 && learnedWords.length === words.length;
-
-            return (
-              <div key={key} className="catTileWrap">
-                <div className="catTile">
-                  <div className="catName">{formatCategoryName(key)}</div>
-                  <div className="muted small">
-                    {pct}% learned{done && " • complete"}
-                  </div>
-                  <MiniBar pct={pct} />
-                  <div className="muted small" style={{ marginTop: 6 }}>
-                    In progress:{" "}
-                    {inProgressWords
-                      .map((w) => w.english)
-                      .slice(0, 6)
-                      .join(", ") || "—"}
-                  </div>
-                  <div className="muted small" style={{ marginTop: 2 }}>
-                    Unseen:{" "}
-                    {unseenWords
-                      .map((w) => w.english)
-                      .slice(0, 6)
-                      .join(", ") || "—"}
-                  </div>
-                </div>
-
-                <div className="catActions">
-                  <button
-                    className="btn ghost"
-                    onClick={() => onPractice(key)}
-                  >
-                    Practice
-                  </button>
-                  <button
-                    className="btn"
-                    disabled={done}
-                    onClick={() => !done && onLearn(key)}
-                  >
-                    {done ? "Completed" : "Learn"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-      </div>
-    </section>
-  );
-}
-
-/* =======================
-   Flashcards
-======================= */
-
-function Flashcard({
-  entry,
-  flip,
-  onFlip,
-  onGrade,
-  strength,
-  isPractice,
-  onRestartPractice,
-}: {
-  entry: VocabEntry;
-  flip: boolean;
-  onFlip: () => void;
-  onGrade: (r: keyof typeof RATING_MAP) => void;
-  strength: number;
-  isPractice?: boolean;
-  onRestartPractice?: () => void;
-}) {
-  return (
-    <div className="card">
-      <div className="cardTop">
-        <div className="tag">{formatCategoryName(entry.category)}</div>
-        <div className="strength">Strength: {strength}</div>
-      </div>
-
-      <button className="flip" onClick={onFlip}>
-        {!flip ? (
-          <>
-            <div className="prompt">English</div>
-            <div className="big">{entry.english}</div>
-            <div className="hint">Tap to reveal phonetic</div>
-          </>
-        ) : (
-          <>
-            <div className="prompt">Phonetic Sinhala</div>
-            <div className="big">{entry.phonetic}</div>
-            <div className="hint">
-              {isPractice
-                ? "Tap practice again to cycle."
-                : "How was your recall?"}
-            </div>
-          </>
-        )}
-      </button>
-
-      {!isPractice && flip && (
-        <div className="grades">
-          <button
-            className="grade again"
-            onClick={() => onGrade("again")}
-          >
-            Again
-          </button>
-          <button className="grade hard" onClick={() => onGrade("hard")}>
-            Hard
-          </button>
-          <button className="grade good" onClick={() => onGrade("good")}>
-            Good
-          </button>
-          <button className="grade easy" onClick={() => onGrade("easy")}>
-            Easy
-          </button>
-        </div>
-      )}
-
-      {isPractice && (
-        <div className="row" style={{ justifyContent: "center" }}>
-          <button className="btn ghost" onClick={onRestartPractice}>
-            Restart
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BrowseFlashcards({
-  vocab,
-  selectedCategory,
-  srs,
-}: {
-  vocab: VocabEntry[];
-  selectedCategory: string | "all";
-  srs: Record<string, SRSCard>;
-}) {
-  const list =
-    selectedCategory === "all"
-      ? vocab
-      : vocab.filter((v) => v.category === selectedCategory);
-
-  const [i, setI] = useState(0);
-  const [flip, setFlip] = useState(false);
-
-  const current = list[i];
-  if (!current) return <div className="empty">No words in this category.</div>;
-
-  return (
-    <div className="card">
-      <div className="cardTop">
-        <div className="tag">{formatCategoryName(current.category)}</div>
-        <div className="strength">
-          Strength: {srs[current.id]?.strength ?? 0}
-        </div>
-      </div>
-
-      <button className="flip" onClick={() => setFlip((f) => !f)}>
-        {!flip ? (
-          <>
-            <div className="prompt">English</div>
-            <div className="big">{current.english}</div>
-          </>
-        ) : (
-          <>
-            <div className="prompt">Phonetic Sinhala</div>
-            <div className="big">{current.phonetic}</div>
-          </>
-        )}
-      </button>
-
-      <div className="row">
-        <button
-          className="btn ghost"
-          onClick={() => {
-            setFlip(false);
-            setI((x) => (x - 1 + list.length) % list.length);
-          }}
         >
-          Prev
+          ⚙️
         </button>
         <button
-          className="btn"
-          onClick={() => {
-            setFlip(false);
-            setI((x) => (x + 1) % list.length);
-          }}
+          className={`memBtn small memPrimary ${totalDue > 0 ? "active" : ""}`}
+          onClick={() => onNavigate("categories")} 
+          disabled={totalDue === 0}
         >
-          Next
+          {totalDue > 0 ? `Study (${totalDue})` : "Study"}
         </button>
       </div>
     </div>
   );
 }
-
-/* =======================
-   Session Summary (Learn/Review)
-======================= */
-
-function SessionSummary({
-  stats,
-  onBackToCategories,
-  onContinue,
-}: {
-  stats: SessionStats;
-  onBackToCategories: () => void;
-  onContinue: () => void;
-}) {
-  const accuracy =
-    stats.reviews === 0
-      ? 0
-      : Math.round((stats.correct / stats.reviews) * 100);
-
-  return (
-    <div className="card sessionSummary">
-      <h3>Session complete</h3>
-      <p className="muted small">
-        Mode: <strong>{stats.mode === "learn" ? "Learn" : "Review"}</strong>{" "}
-        • Category: <strong>{formatCategoryName(stats.category)}</strong>
-      </p>
-
-      <div className="statsGrid">
-        <StatBox label="Cards reviewed" value={stats.reviews} />
-        <StatBox label="Correct" value={stats.correct} />
-        <StatBox label="Accuracy" value={`${accuracy}%`} />
-      </div>
-
-      <div className="row" style={{ marginTop: 16 }}>
-        <button className="btn ghost" onClick={onBackToCategories}>
-          Back to categories
-        </button>
-        <button className="btn" onClick={onContinue}>
-          Learn more
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* =======================
-   Sentence Lab Card
-======================= */
-
-function SentenceCard({
-  currentSentence,
-  pool,
-  answer,
-  sentenceResult,
-  onDragStart,
-  allowDrop,
-  dropTo,
-  onChipClick,
-  checkSentence,
-  next,
-  reset,
-}: {
-  currentSentence: SentenceEntry;
-  pool: string[];
-  answer: string[];
-  sentenceResult: "correct" | "wrong" | null;
-  onDragStart: (
-    e: React.DragEvent,
-    word: string,
-    from: "pool" | "answer"
-  ) => void;
-  allowDrop: (e: React.DragEvent) => void;
-  dropTo: (target: "pool" | "answer", e: React.DragEvent) => void;
-  onChipClick: (word: string, from: "pool" | "answer") => void;
-  checkSentence: () => void;
-  next: () => void;
-  reset: () => void;
-}) {
-  return (
-    <div className="sentenceWrap">
-      <div className="sentenceCard">
-        <div className="sentenceEnglish">{currentSentence.english}</div>
-      </div>
-
-      <div className="dropZones">
-        <div
-          className="zone"
-          onDrop={(e) => dropTo("answer", e)}
-          onDragOver={allowDrop}
-        >
-          <div className="zoneTitle">Your sentence</div>
-          <div className="chips">
-            {answer.map((w, i) => (
-              <div
-                key={`${w}-${i}`}
-                className="chip"
-                draggable
-                onClick={() => onChipClick(w, "answer")}
-                onDragStart={(e) => onDragStart(e, w, "answer")}
-              >
-                {w}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          className="zone"
-          onDrop={(e) => dropTo("pool", e)}
-          onDragOver={allowDrop}
-        >
-          <div className="zoneTitle">Word bank</div>
-          <div className="chips">
-            {pool.map((w, i) => (
-              <div
-                key={`${w}-${i}`}
-                className="chip"
-                draggable
-                onClick={() => onChipClick(w, "pool")}
-                onDragStart={(e) => onDragStart(e, w, "pool")}
-              >
-                {w}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="row">
-        <button className="btn" onClick={checkSentence}>
-          Check
-        </button>
-        <button className="btn ghost" onClick={next}>
-          Next
-        </button>
-        <button className="btn ghost" onClick={reset}>
-          Reset
-        </button>
-      </div>
-
-      {sentenceResult && (
-        <div
-          className={
-            sentenceResult === "correct" ? "result ok" : "result bad"
-          }
-        >
-          {sentenceResult === "correct"
-            ? "Correct! 🎉"
-            : "Not quite — try again"}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =======================
-   Stats Screen
-======================= */
-
-function StatsScreen({
-  overallProgress,
-  progressByCategory,
-  weakWords,
-  strongWords,
-  vocab,
-  srs,
-  categories,
-  onBack,
-}: {
-  overallProgress: {
-    learned: number;
-    total: number;
-    avgStrength: number;
-    inProgress: number;
-    unseen: number;
-  };
-  progressByCategory: Record<
-    string,
-    {
-      total: number;
-      learned: number;
-      inProgress: number;
-      unseen: number;
-      avgStrength: number;
-    }
-  >;
-  weakWords: { id: string; english: string; phonetic: string; strength: number }[];
-  strongWords: { id: string; english: string; phonetic: string; strength: number }[];
-  vocab: VocabEntry[];
-  srs: Record<string, SRSCard>;
-  categories: (string | "all")[];
-  onBack: () => void;
-}) {
-  const initialCategory =
-    (categories[0] as string | undefined) ?? (vocab[0]?.category ?? "");
-  const [selectedCategory, setSelectedCategory] =
-    useState<string>(initialCategory);
-
-  const learnedInCat =
-    selectedCategory === ""
-      ? []
-      : vocab.filter(
-          (v) =>
-            v.category === selectedCategory &&
-            (srs[v.id]?.strength ?? 0) >= LEARNED_THRESHOLD
-        );
-
-  const inProgressInCat =
-    selectedCategory === ""
-      ? []
-      : vocab.filter(
-          (v) =>
-            v.category === selectedCategory &&
-            (srs[v.id]?.strength ?? 0) > 0 &&
-            (srs[v.id]?.strength ?? 0) < LEARNED_THRESHOLD
-        );
-
-  const unseenInCat =
-    selectedCategory === ""
-      ? []
-      : vocab.filter(
-          (v) =>
-            v.category === selectedCategory &&
-            (srs[v.id]?.strength ?? 0) === 0
-        );
-
-  return (
-    <section className="panel">
-      <div className="panelHead">
-        <div className="panelHeadLeft">
-          <h2>Stats</h2>
-          <button className="btn ghost smallBtn" onClick={onBack}>
-            Back
-          </button>
-        </div>
-      </div>
-
-      <div className="statsGrid">
-        <StatBox
-          label="Learned"
-          value={`${overallProgress.learned}/${overallProgress.total}`}
-        />
-        <StatBox label="In progress" value={overallProgress.inProgress} />
-        <StatBox label="Unseen" value={overallProgress.unseen} />
-        <StatBox label="Avg strength" value={overallProgress.avgStrength} />
-      </div>
-
-      <h3>Per-category</h3>
-      <div className="catProgressList">
-        {Object.keys(progressByCategory).map((c) => {
-          const p = progressByCategory[c];
-          const pct = Math.round((p.learned / p.total) * 100);
-          return (
-            <div className="catProgressRow" key={c}>
-              <div className="catProgressLeft">
-                <div className="catName">{formatCategoryName(c)}</div>
-                <div className="muted small">
-                  Learned: {p.learned} • In progress: {p.inProgress} • Unseen:{" "}
-                  {p.unseen}
-                </div>
-              </div>
-              <MiniBar pct={pct} />
-              <div className="muted small">{pct}%</div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="panelSubHead">
-        <h3>Words by category</h3>
-      </div>
-      {categories && categories.length > 0 && (
-        <div className="settingsRow">
-          <label>Category</label>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            style={{
-              background: "var(--panel-2)",
-              border: "1px solid var(--line)",
-              color: "var(--text)",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontWeight: 600,
-            }}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {formatCategoryName(String(c))}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {selectedCategory && (
-        <div className="lists">
-          <div>
-            <h3>Learned in {formatCategoryName(selectedCategory)}</h3>
-            <ul className="wordList">
-              {learnedInCat.length === 0 && (
-                <li className="muted small">No learned words yet.</li>
-              )}
-              {learnedInCat.map((w) => (
-                <li key={w.id}>
-                  <span>{w.english}</span>
-                  <span className="muted">{w.phonetic}</span>
-                  <span className="muted small">
-                    {srs[w.id]?.strength ?? 0}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div>
-            <h3>In progress in {formatCategoryName(selectedCategory)}</h3>
-            <ul className="wordList">
-              {inProgressInCat.length === 0 && (
-                <li className="muted small">Nothing in progress.</li>
-              )}
-              {inProgressInCat.map((w) => (
-                <li key={w.id}>
-                  <span>{w.english}</span>
-                  <span className="muted">{w.phonetic}</span>
-                  <span className="muted small">
-                    {srs[w.id]?.strength ?? 0}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div>
-            <h3>Unseen in {formatCategoryName(selectedCategory)}</h3>
-            <ul className="wordList">
-              {unseenInCat.length === 0 && (
-                <li className="muted small">Everything started 🎉</li>
-              )}
-              {unseenInCat.map((w) => (
-                <li key={w.id}>
-                  <span>{w.english}</span>
-                  <span className="muted">{w.phonetic}</span>
-                  <span className="muted small">
-                    {srs[w.id]?.strength ?? 0}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      <div className="panelSubHead">
-        <h3>Weak vs strong (all categories)</h3>
-      </div>
-      <div className="lists">
-        <div>
-          <h3>In progress (weak words)</h3>
-          <ul className="wordList">
-            {weakWords.map((w) => (
-              <li key={w.id}>
-                <span>{w.english}</span>
-                <span className="muted">{w.phonetic}</span>
-                <span className="muted small">{w.strength}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div>
-          <h3>Strong words</h3>
-          <ul className="wordList">
-            {strongWords.map((w) => (
-              <li key={w.id}>
-                <span>{w.english}</span>
-                <span className="muted">{w.phonetic}</span>
-                <span className="muted small">{w.strength}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* =======================
-   Settings Screen
-======================= */
-
-function SettingsScreen({
-  state,
-  setState,
-  onReset,
-}: {
-  state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-  onReset: () => void;
-}) {
-  return (
-    <section className="panel">
-      <div className="panelHead">
-        <div className="panelHeadLeft">
-          <h2>Settings</h2>
-        </div>
-      </div>
-
-      <div className="settingsRow">
-        <label>Auto-suggest session length</label>
-        <input
-          type="checkbox"
-          checked={state.autoSuggest}
-          onChange={(e) =>
-            setState((s) => ({
-              ...s,
-              autoSuggest: e.target.checked,
-            }))
-          }
-        />
-      </div>
-
-      <div className="settingsRow">
-        <label>Cloud sync</label>
-        <input
-          type="checkbox"
-          checked={state.cloudSyncEnabled}
-          onChange={(e) =>
-            setState((s) => ({
-              ...s,
-              cloudSyncEnabled: e.target.checked,
-            }))
-          }
-        />
-      </div>
-
-      <div className="settingsRow">
-        <button className="btn danger" onClick={onReset}>
-          Reset progress
-        </button>
-      </div>
-    </section>
-  );
-}
-
-/* =======================
-   Session Modal
-======================= */
-
-function SessionModal({
-  suggested,
-  choice,
-  autoSuggest,
-  onChangeChoice,
-  onToggleAutoSuggest,
-  onCancel,
-  onConfirm,
-}: {
-  suggested: SessionSize;
-  choice: SessionSize;
-  autoSuggest: boolean;
-  onChangeChoice: (c: SessionSize) => void;
-  onToggleAutoSuggest: (v: boolean) => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const sizes: SessionSize[] = [5, 10, 20, "unlimited"];
-
-  return (
-    <div className="modalBackdrop" onMouseDown={onCancel}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modalTitle">Session size</div>
-        <div className="muted small">
-          Suggested: {suggested === "unlimited" ? "Unlimited" : suggested}
-        </div>
-
-        <div className="modalChoices">
-          {sizes.map((s) => (
-            <button
-              key={s}
-              className={choice === s ? "choice active" : "choice"}
-              onClick={() => onChangeChoice(s)}
-            >
-              {s === "unlimited" ? "Unlimited" : `${s} words`}
-            </button>
-          ))}
-        </div>
-
-        <label className="toggleRow">
-          <input
-            type="checkbox"
-            checked={autoSuggest}
-            onChange={(e) => onToggleAutoSuggest(e.target.checked)}
-          />
-          Auto-suggest length
-        </label>
-
-        <div className="modalActions">
-          <button className="btn ghost" onClick={onCancel}>
-            Cancel
-          </button>
-          <button className="btn" onClick={onConfirm}>
-            Start
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =======================
-   Small UI helpers
-======================= */
 
 function ProgressBar({ done, total }: { done: number; total: number }) {
-  const safeDone = Math.min(done, total);
-  const pct = total === 0 ? 0 : Math.round((safeDone / total) * 100);
+  const clampedDone = Math.min(done, total);
+  const pct =
+    total === 0 ? 0 : Math.round((clampedDone / total) * 100);
 
   return (
-    <div className="progress">
-      <div className="progressBar">
-        <div className="progressFill" style={{ width: `${pct}%` }} />
+    <div className="memProgress">
+      <div className="memProgressBar">
+        <div className="memProgressFill" style={{ width: `${pct}%` }} />
       </div>
       <div className="muted small">
-        {safeDone}/{total}
+        {clampedDone}/{total}
       </div>
     </div>
   );
 }
 
-function EmptyBlock({
-  title,
-  subtitle,
-  actionLabel,
-  onAction,
-}: {
-  title: string;
-  subtitle: string;
-  actionLabel: string;
-  onAction: () => void;
-}) {
+function StatBox({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="empty">
-      <div className="emptyTitle">{title}</div>
-      <div className="muted">{subtitle}</div>
-      <button
-        className="btn"
-        style={{ marginTop: 12 }}
-        onClick={onAction}
-      >
-        {actionLabel}
-      </button>
-    </div>
-  );
-}
-
-function StatBox({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="stat">
+    <div className="memStatBox">
       <div className="statLabel">{label}</div>
       <div className="statValue">{value}</div>
     </div>
   );
 }
 
-function MiniBar({ pct }: { pct: number }) {
+function CategoryItem({
+  category,
+  count,
+  onStudy,
+  stats,
+}: {
+  category: { id: string; label: string };
+  count: number;
+  onStudy: (id: string) => void;
+  stats: { reviewsDue: number; newCards: number };
+}) {
+    const totalDue = stats.reviewsDue + stats.newCards;
   return (
-    <div className="miniBar">
-      <div className="miniFill" style={{ width: `${pct}%` }} />
+    <div
+      className="memCategoryItem"
+    >
+      <div className="categoryInfo">
+        <div className="categoryName large">{category.label}</div>
+        <div className="categoryCount muted">
+            {count} words total 
+            {stats.reviewsDue > 0 && <span> • {stats.reviewsDue} due</span>}
+            {stats.newCards > 0 && <span> • {stats.newCards} new</span>}
+        </div>
+      </div>
+      <button 
+        className={`memBtn small memPrimary ${totalDue > 0 ? "active" : "disabled"}`}
+        onClick={() => onStudy(category.id)}
+        disabled={totalDue === 0}
+      >
+        Study ({totalDue > 0 ? totalDue : 0})
+      </button>
+    </div>
+  );
+}
+
+
+/* =======================
+   Main App
+======================= */
+
+function App() {
+  const [state, setState] = useState<AppState>(loadAppState);
+  const [screen, setScreen] = useState<Screen>({ key: "home", category: "" });
+  const [session, setSession] = useState<Session | null>(null); 
+
+  // 1. Load and Save State
+  useEffect(() => {
+    saveAppState(state);
+  }, [state]);
+
+  // 2. Pre-Calculate Stats for ALL Categories
+  const { totalReviewsDue, totalNewCards, allCategoryStats, categoryVocabPools } = useMemo(() => {
+    const today = new Date().getTime();
+    let totalReviewsDue = 0;
+    let totalNewCards = 0;
+    const stats: Record<string, { reviewsDue: CardData[], newCards: CardData[] }> = {};
+    const vocabPools: Record<string, CardData[]> = {};
+    
+    // Initialize stats and vocab pools for all categories
+    ALL_CATEGORIES.forEach(cat => {
+        stats[cat.id] = { reviewsDue: [], newCards: [] };
+        vocabPools[cat.id] = [];
+    });
+
+    ALL_WORDS.forEach((word) => {
+      const srsCard = state.srs[word.id];
+      const categoryId = word.category;
+
+      if (!stats[categoryId]) return; 
+      
+      vocabPools[categoryId].push(word);
+
+      if (srsCard && srsCard.due <= today) {
+        stats[categoryId].reviewsDue.push(word);
+        totalReviewsDue++;
+      } else if (!srsCard) {
+        stats[categoryId].newCards.push(word);
+        totalNewCards++;
+      }
+    });
+    
+    // Sort review queues (oldest first) and shuffle new queues
+    const allCategoryStats: Record<string, { reviewsDue: number, newCards: number, reviewQueue: CardData[], newQueue: CardData[] }> = {};
+    for (const id in stats) {
+        stats[id].reviewsDue.sort((a, b) => (state.srs[a.id]?.due || 0) - (state.srs[b.id]?.due || 0));
+        allCategoryStats[id] = {
+            reviewsDue: stats[id].reviewsDue.length,
+            newCards: stats[id].newCards.length,
+            reviewQueue: stats[id].reviewsDue,
+            newQueue: shuffle(stats[id].newCards)
+        };
+    }
+
+
+    return {
+      totalReviewsDue,
+      totalNewCards,
+      allCategoryStats,
+      categoryVocabPools: vocabPools,
+    };
+  }, [state.srs]);
+
+  // 3. Navigation Handlers
+  const navigate = useCallback((key: ScreenKey, category?: string) => {
+    setScreen({ key, category: category ?? screen.category });
+    if (key !== "review" && key !== "practice") {
+      setSession(null); 
+    }
+  }, [screen.category]);
+
+  const endSession = useCallback(() => {
+    setSession(null);
+    navigate("home");
+  }, [navigate]);
+  
+  // 4. Session Start Logic (Unified Queue)
+  const startSession = useCallback((categoryId: string) => {
+    const categoryStats = allCategoryStats[categoryId];
+    if (!categoryStats || (categoryStats.reviewsDue + categoryStats.newCards) === 0) return;
+
+    const reviewLimit = state.sessionSize === "unlimited" ? Infinity : state.sessionSize;
+    
+    let newCardsToLearn = MAX_NEW_CARDS_TO_LEARN;
+    if (state.sessionSize !== "unlimited") {
+        newCardsToLearn = Math.min(newCardsToLearn, reviewLimit);
+    }
+    
+    // Slice and combine. The limit applies to the total number of cards.
+    const newCards = categoryStats.newQueue.slice(0, newCardsToLearn);
+    const reviewCards = categoryStats.reviewQueue.slice(0, reviewLimit - newCards.length);
+
+    // Interleave new and review cards and shuffle the resulting study queue
+    const studyQueue = shuffle([...newCards, ...reviewCards]);
+    const totalCards = studyQueue.length;
+
+    if (totalCards === 0) return;
+
+    setSession({
+        studyQueue: studyQueue,
+        index: 0,
+        active: true,
+        totalCards: totalCards,
+        sessionCategory: categoryId,
+    });
+    
+    navigate("review", categoryId); // Start on the Quiz/Review screen
+  }, [allCategoryStats, state.sessionSize, navigate]);
+
+  // 5. SRS Update and Index Movement Logic
+  const handleCardComplete = useCallback((wordId: string, quality: 1 | 2 | 3 | 4, _isNewCard: boolean, isPractice: boolean = false) => {
+    // Renamed 'isNewCard' to '_isNewCard' to resolve TS6133 unused parameter error.
+
+    // 1. Update SRS State
+    setState((prevState) => {
+        // Fix TS2345: Explicitly define all required/optional properties in the default object.
+        const oldCard: SRSCard = prevState.srs[wordId] || {
+            id: wordId, 
+            reps: 0, 
+            lapses: 0, 
+            ease: 2.5, 
+            interval: 0, 
+            due: 0, // Initial due date
+            strength: 0,
+            lastReviewed: 0, // Explicitly including optional property to satisfy type checker
+        };
+        
+        // Quality update logic remains the same
+        const newCardState = calculateSM2(oldCard, quality);
+        const today = new Date().toISOString().split('T')[0];
+
+        return {
+            ...prevState,
+            srs: { ...prevState.srs, [wordId]: newCardState },
+            totalReviews: prevState.totalReviews + 1,
+            correctReviews: prevState.correctReviews + (quality >= 3 ? 1 : 0),
+            lastStudyDay: today,
+        };
+    });
+
+    // 2. Update Session Index and Navigation (only for formal sessions)
+    if (session && !isPractice) {
+        setSession((s) => {
+            if (!s) return null;
+            let newS = { ...s };
+
+            newS.index += 1;
+            
+            if (newS.index >= newS.studyQueue.length) {
+                newS.active = false;
+                setTimeout(endSession, 50); 
+            }
+            return newS;
+        });
+    }
+    // Note: Practice mode handles its own advancement by re-setting the screen key
+  }, [session, endSession]);
+
+  // 6. Card and Progress Calculations for UI (Updated for single queue)
+  const currentCard = useMemo(() => {
+    if (!session || !session.active) return null;
+    return session.studyQueue[session.index]; 
+  }, [session]);
+
+  const currentSRSCard = useMemo(() => {
+    return currentCard ? state.srs[currentCard.id] || null : null;
+  }, [currentCard, state.srs]);
+  
+  const cardsDone = useMemo(() => {
+    if (!session) return 0;
+    return session.index;
+  }, [session]);
+
+  const activeCategoryLabel = useMemo(() => {
+    const categoryId = screen.category || session?.sessionCategory;
+    if (!categoryId) return "All";
+    const cat = ALL_CATEGORIES.find(c => c.id === categoryId);
+    return cat ? cat.label : categoryId.charAt(0).toUpperCase() + categoryId.slice(1);
+  }, [screen.category, session?.sessionCategory]);
+
+
+  // 7. Render Screens
+  const renderScreen = () => {
+    switch (screen.key) {
+      case "home":
+        return (
+          <div className="memContainer homeScreen">
+            <div className="memHeader">
+                Sinhala Trainer Status
+            </div>
+            <div className="memStatsGrid">
+              <StatBox label="Reviews Due" value={totalReviewsDue} />
+              <StatBox label="New Cards" value={totalNewCards} />
+              <StatBox label="Total Reviews" value={state.totalReviews} />
+              <StatBox label="Correct %" value={`${state.totalReviews > 0 ? ((state.correctReviews / state.totalReviews) * 100).toFixed(0) : 0}%`} />
+            </div>
+
+            <div className="memActionGrid">
+              <button
+                className="memBtn large memPrimary"
+                onClick={() => navigate("categories")}
+                disabled={totalReviewsDue + totalNewCards === 0}
+              >
+                Go to Categories to Study
+              </button>
+              <button
+                className="memBtn large"
+                onClick={() => navigate("categories")}
+              >
+                Browse Categories
+              </button>
+              <button
+                className="memBtn large"
+                onClick={() => navigate("practice")}
+              >
+                Quiz Mode (Practice)
+              </button>
+            </div>
+          </div>
+        );
+
+      case "categories":
+        return (
+          <div className="memContainer categoryScreen">
+            <div className="memHeader">
+                <button className="memBtn backButton" onClick={() => navigate("home")}>
+                    ←
+                </button>
+                <h1>Study Categories</h1>
+            </div>
+            {ALL_CATEGORIES.map((cat) => (
+              <CategoryItem
+                key={cat.id}
+                category={cat}
+                count={ALL_WORDS.filter(v => v.category === cat.id).length}
+                onStudy={startSession}
+                stats={{
+                    reviewsDue: allCategoryStats[cat.id]?.reviewsDue || 0,
+                    newCards: allCategoryStats[cat.id]?.newCards || 0,
+                }}
+              />
+            ))}
+          </div>
+        );
+
+      case "review": // This is now the unified Study/Quiz session
+        if (!session || !session.active || session.index >= session.studyQueue.length) {
+            return (
+              <div className="memContainer">
+                <div className="memHeader">Study Session</div>
+                <div className="memCard">
+                    <div className="memCardContent">
+                        <div className="foreignWord">Session Complete! 🎉</div>
+                        <div className="foreignMeaning muted">You have reviewed {session?.totalCards || 0} cards in {activeCategoryLabel}.</div>
+                        <button className="memBtn memPrimary" onClick={() => navigate("home")}>
+                            Go Home
+                        </button>
+                    </div>
+                </div>
+              </div>
+            )
+        }
+        
+        const studyCard = session.studyQueue[session.index];
+        const studyVocabPool = categoryVocabPools[session.sessionCategory] || ALL_WORDS;
+        const isNewCard = !state.srs[studyCard.id]; // Check if the card is a new card (has no SRS state)
+        
+        return (
+          <div className="memContainer">
+            <div className="memHeader">
+                {isNewCard ? "Learning New Word" : "Reviewing Card"} in {activeCategoryLabel}
+            </div>
+            <ProgressBar
+              done={cardsDone}
+              total={session.totalCards}
+            />
+            <QuizScreen
+              word={studyCard}
+              vocabPool={studyVocabPool} 
+              srsCard={currentSRSCard}
+              onAnswer={(quality) => handleCardComplete(studyCard.id, quality, isNewCard)}
+              onSkip={() => handleCardComplete(studyCard.id, 1, isNewCard)} 
+              isPracticeMode={false}
+              isNewCard={isNewCard}
+            />
+          </div>
+        );
+
+      case "practice":
+        // Practice mode uses all words for a complete challenge
+        const practiceVocabPool = ALL_WORDS; 
+
+        if (practiceVocabPool.length === 0) {
+            return (
+                <div className="memContainer empty">
+                    <div className="memHeader">Quiz Mode</div>
+                    <div className="muted" style={{ textAlign: 'center' }}>No words available for practice.</div>
+                    <button className="memBtn memPrimary" style={{ marginTop: 12 }} onClick={() => navigate("home")}>
+                        Go Home
+                    </button>
+                </div>
+            );
+        }
+        
+        // Pick a random card from the entire pool
+        const randomCard = shuffle(practiceVocabPool)[0]; 
+
+        return (
+            <div className="memContainer">
+                <div className="memHeader">
+                    Quiz Mode: All Words
+                </div>
+                <QuizScreen
+                    word={randomCard}
+                    vocabPool={practiceVocabPool}
+                    srsCard={state.srs[randomCard.id] || null}
+                    isPracticeMode={true}
+                    isNewCard={!state.srs[randomCard.id]}
+                    onAnswer={(quality) => {
+                        // 1. Update SRS/Stats (no session index update)
+                        handleCardComplete(randomCard.id, quality, !state.srs[randomCard.id], true); 
+                        // 2. Immediately queue up the next random card for the next render cycle
+                        setScreen({ key: "practice" }); 
+                    }}
+                    onSkip={() => {
+                        // Skipping also immediately queues up the next random card
+                        setScreen({ key: "practice" });
+                    }}
+                />
+            </div>
+        );
+
+      case "settings":
+        return (
+          <div className="memContainer settingsScreen">
+            <div className="memHeader">
+                <button className="memBtn backButton" onClick={() => navigate("home")}>
+                    ←
+                </button>
+                <h1>Settings</h1>
+            </div>
+            <div className="memSettingsRow">
+              <label htmlFor="sessionSize">Session Size (Cards)</label>
+              <select
+                id="sessionSize"
+                value={state.sessionSize}
+                onChange={(e) =>
+                  setState((s) => ({
+                    ...s,
+                    sessionSize: e.target.value as SessionSize,
+                  }))
+                }
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value="unlimited">Unlimited</option>
+              </select>
+            </div>
+          </div>
+        );
+      case "stats":
+        return (
+          <div className="memContainer">
+            <div className="memHeader">
+                <button className="memBtn backButton" onClick={() => navigate("home")}>
+                    ←
+                </button>
+                <h1>Statistics</h1>
+            </div>
+            <div className="memStatsGrid">
+                <StatBox label="Total Reviews" value={state.totalReviews} />
+                <StatBox label="Correct Answers" value={state.correctReviews} />
+                <StatBox label="Incorrect Answers" value={state.totalReviews - state.correctReviews} />
+                <StatBox label="Overall Accuracy" value={`${state.totalReviews > 0 ? ((state.correctReviews / state.totalReviews) * 100).toFixed(1) : 0}%`} />
+                <StatBox label="Active Cards" value={Object.keys(state.srs).length} />
+            </div>
+          </div>
+        );
+        
+      default:
+        return <div className="memContainer">Error: Unknown Screen</div>;
+    }
+  };
+  
+  return (
+    <div className="memApp">
+      <TopBar
+        onNavigate={navigate}
+        totalDue={totalReviewsDue + totalNewCards}
+      />
+      <div className="memMain">{renderScreen()}</div>
     </div>
   );
 }
