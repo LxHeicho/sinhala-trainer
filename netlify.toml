@@ -1,0 +1,17 @@
+[build]
+  # Confirms the directory Netlify publishes
+  publish = "dist"
+  # Confirms the command Netlify runs
+  command = "npm run build"
+
+# Fixes the primary MIME Type error for JS modules
+[[headers]]
+  for = "/assets/*.js"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+# Fixes the syntax error for the manifest by ensuring correct MIME type
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Content-Type = "application/manifest+json"
