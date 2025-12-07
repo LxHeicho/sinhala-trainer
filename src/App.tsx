@@ -144,7 +144,7 @@ function calculateSM2(card: SRSCard, quality: 1 | 2 | 3 | 4) {
 }
 
 // Local Storage Keys
-const APP_STATE_KEY = "sinhala_trainer_v2_state";
+const APP_STATE_KEY = "sinhalaTrainerAppState"; // Changed key for better isolation
 
 function loadAppState(): AppState {
   try {
@@ -152,13 +152,15 @@ function loadAppState(): AppState {
     if (json) {
       const loadedState: AppState = JSON.parse(json);
 
+      // Ensure 'due' and 'lastReviewed' are numbers (timestamps) when loaded
       for (const id in loadedState.srs) {
         loadedState.srs[id].due = Number(loadedState.srs[id].due);
         if (loadedState.srs[id].lastReviewed) {
           loadedState.srs[id].lastReviewed = Number(loadedState.srs[id].lastReviewed);
         }
       }
-      return { ...defaultAppState, ...loadedState };
+      // Merge with defaults to ensure new properties are always present
+      return { ...defaultAppState, ...loadedState }; 
     }
   } catch (e) {
     console.error("Could not load state from local storage", e);
@@ -433,11 +435,13 @@ function CategoryItem({
 ======================= */
 
 function App() {
+  // ⬅️ INITIALIZE STATE BY CALLING loadAppState FUNCTION
   const [state, setState] = useState<AppState>(loadAppState);
   const [screen, setScreen] = useState<Screen>({ key: "home", category: "" });
   const [session, setSession] = useState<Session | null>(null); 
 
   // 1. Load and Save State
+  // ⬅️ USE useEffect TO SAVE STATE WHENEVER THE 'state' OBJECT CHANGES
   useEffect(() => {
     saveAppState(state);
   }, [state]);
