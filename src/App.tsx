@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { VOCAB } from "./data/vocab";
-// The 'SENTENCES' import was removed because it was unused (TS6133 fix)
+import { SENTENCES } from "./data/sentences";
 import "./App.css";
 
 /* =======================
@@ -12,6 +12,14 @@ type VocabEntry = {
   category: string;
   english: string;
   phonetic: string;
+};
+
+type SentenceEntry = {
+  id: string;
+  english: string;
+  phonetic: string;
+  tokens: string[];
+  distractors?: string[];
 };
 
 type CardData = VocabEntry; 
@@ -197,6 +205,7 @@ const defaultAppState: AppState = {
 };
 
 const ALL_WORDS: CardData[] = VOCAB;
+
 const ALL_CATEGORIES: { id: string; label: string }[] = [
   ...new Set(VOCAB.map((v) => v.category)),
 ].map((cat) => ({ id: cat, label: cat.charAt(0).toUpperCase() + cat.slice(1) }));
@@ -208,12 +217,12 @@ const ALL_CATEGORIES: { id: string; label: string }[] = [
 // --- Quiz Screen (Multiple Choice) - Used for Review and Practice ---
 function QuizScreen({
   word,
-  vocabPool, // Pool of words to draw distractors from (usually the current category)
+  vocabPool,
   onAnswer,
   onSkip,
   srsCard,
   isPracticeMode, 
-  isNewCard, // New prop to differentiate new vs. review cards
+  isNewCard,
 }: {
   word: CardData;
   vocabPool: CardData[];
@@ -225,15 +234,27 @@ function QuizScreen({
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [choices, setChoices] = useState<CardData[]>([]);
-  // NEW state: Controls visibility of the manual "Next" button after a wrong answer
   const [showNextButton, setShowNextButton] = useState(false); 
+  
+  // FIX: Use useRef to store the timeout ID
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null); 
 
   useEffect(() => {
-    // Re-generate choices when the word changes
+    // Re-generate choices when the word changes (which happens on re-mount)
     setChoices(generateChoices(word, vocabPool));
     setSelected(null);
-    setShowNextButton(false); // Reset next button state
-  }, [word, vocabPool]);
+    setShowNextButton(false);
+    
+    // FIX: Cleanup function runs when the component is unmounted (due to key change)
+    // and cancels any pending setTimeout, preventing the freeze.
+    return () => {
+        if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+        }
+    };
+    // The dependency array is fine, as the component is forcibly reset via the 'key' prop.
+  }, [word, vocabPool]); 
 
   function handleSelect(choice: CardData) {
     if (selected) return;
@@ -241,11 +262,10 @@ function QuizScreen({
     setSelected(choice.id);
 
     const isCorrect = choice.id === word.id;
-    // Determine SM-2 quality score: 3 (Good) for correct, 1 (Again) for incorrect
     const quality = isCorrect ? 3 : 1; 
 
     // Apply delay for feedback visibility
-    setTimeout(() => {
+    const timer = setTimeout(() => { // Store the timeout ID locally
         if (isCorrect) {
             // Correct answer: auto-advance
             onAnswer(quality); 
@@ -254,11 +274,16 @@ function QuizScreen({
             setShowNextButton(true); 
         }
     }, ANSWER_DELAY_MS); 
+    
+    // Store the timer ID in the ref for cleanup
+    timeoutRef.current = timer; 
   }
   
-  // New function to handle the manual click after a wrong answer
   function handleNext() {
-      // For a wrong answer, the quality is always 1 (lapsed)
+      // Clear the timeout manually if it exists before advancing
+      if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+      }
       onAnswer(1); 
   }
 
@@ -288,7 +313,7 @@ function QuizScreen({
     <div className="memCard">
       <div className="memCardHeader">
         <span className="muted small">{headerLabel}</span>
-        {srsCard && !isPracticeMode && ( // Only show SRS stats in Review Mode
+        {srsCard && !isPracticeMode && (
           <span className="muted small" style={{ marginLeft: 10 }}>
             Lapses: {srsCard.lapses} | Ease: {srsCard.ease.toFixed(2)}
           </span>
@@ -616,23 +641,19 @@ function App() {
 
   // 5. SRS Update and Index Movement Logic
   const handleCardComplete = useCallback((wordId: string, quality: 1 | 2 | 3 | 4, _isNewCard: boolean, isPractice: boolean = false) => {
-    // Renamed 'isNewCard' to '_isNewCard' to resolve TS6133 unused parameter error.
-
     // 1. Update SRS State
     setState((prevState) => {
-        // Fix TS2345: Explicitly define all required/optional properties in the default object.
         const oldCard: SRSCard = prevState.srs[wordId] || {
             id: wordId, 
             reps: 0, 
             lapses: 0, 
             ease: 2.5, 
             interval: 0, 
-            due: 0, // Initial due date
+            due: 0,
             strength: 0,
-            lastReviewed: 0, // Explicitly including optional property to satisfy type checker
+            lastReviewed: 0,
         };
         
-        // Quality update logic remains the same
         const newCardState = calculateSM2(oldCard, quality);
         const today = new Date().toISOString().split('T')[0];
 
@@ -646,6 +667,7 @@ function App() {
     });
 
     // 2. Update Session Index and Navigation (only for formal sessions)
+    // Using functional update is safer, but rely on 'session' dependency for the initial check.
     if (session && !isPractice) {
         setSession((s) => {
             if (!s) return null;
@@ -660,8 +682,7 @@ function App() {
             return newS;
         });
     }
-    // Note: Practice mode handles its own advancement by re-setting the screen key
-  }, [session, endSession]);
+  }, [session, endSession]); 
 
   // 6. Card and Progress Calculations for UI (Updated for single queue)
   const currentCard = useMemo(() => {
@@ -682,7 +703,7 @@ function App() {
     const categoryId = screen.category || session?.sessionCategory;
     
     if (categoryId === FULL_REVIEW_ID) { // Handle the new full review mode
-        return "Full Review";
+        return "Full Review (Prioritized)";
     }
     
     if (!categoryId) return "All";
@@ -715,7 +736,6 @@ function App() {
               >
                 Go to Categories to Study
               </button>
-              {/* NEW BUTTON FOR FULL REVIEW MODE */}
               <button
                 className="memBtn large"
                 onClick={startFullReviewSession}
@@ -801,6 +821,7 @@ function App() {
               total={session.totalCards}
             />
             <QuizScreen
+              key={session.index} // FIX: Ensures component re-mount and state reset
               word={studyCard}
               vocabPool={studyVocabPool} 
               srsCard={currentSRSCard}
@@ -837,19 +858,17 @@ function App() {
                     Quiz Mode: All Words
                 </div>
                 <QuizScreen
+                    key={randomCard.id}
                     word={randomCard}
                     vocabPool={practiceVocabPool}
                     srsCard={state.srs[randomCard.id] || null}
                     isPracticeMode={true}
                     isNewCard={!state.srs[randomCard.id]}
                     onAnswer={(quality) => {
-                        // 1. Update SRS/Stats (no session index update)
                         handleCardComplete(randomCard.id, quality, !state.srs[randomCard.id], true); 
-                        // 2. Immediately queue up the next random card for the next render cycle
                         setScreen({ key: "practice" }); 
                     }}
                     onSkip={() => {
-                        // Skipping also immediately queues up the next random card
                         setScreen({ key: "practice" });
                     }}
                 />
