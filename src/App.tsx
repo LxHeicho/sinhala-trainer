@@ -236,8 +236,8 @@ function QuizScreen({
   const [choices, setChoices] = useState<CardData[]>([]);
   const [showNextButton, setShowNextButton] = useState(false); 
   
-  // FIX: Use useRef to store the timeout ID
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null); 
+  // FIX: Changed NodeJS.Timeout to number | null. The type for browser setTimeout IDs is number.
+  const timeoutRef = useRef<number | null>(null); 
 
   useEffect(() => {
     // Re-generate choices when the word changes (which happens on re-mount)
@@ -245,15 +245,14 @@ function QuizScreen({
     setSelected(null);
     setShowNextButton(false);
     
-    // FIX: Cleanup function runs when the component is unmounted (due to key change)
+    // Cleanup function runs when the component is unmounted (due to key change)
     // and cancels any pending setTimeout, preventing the freeze.
     return () => {
-        if (timeoutRef.current) {
+        if (timeoutRef.current !== null) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
         }
     };
-    // The dependency array is fine, as the component is forcibly reset via the 'key' prop.
   }, [word, vocabPool]); 
 
   function handleSelect(choice: CardData) {
@@ -265,7 +264,8 @@ function QuizScreen({
     const quality = isCorrect ? 3 : 1; 
 
     // Apply delay for feedback visibility
-    const timer = setTimeout(() => { // Store the timeout ID locally
+    // Store the timer ID in the ref for cleanup
+    const timer = setTimeout(() => { 
         if (isCorrect) {
             // Correct answer: auto-advance
             onAnswer(quality); 
@@ -281,8 +281,9 @@ function QuizScreen({
   
   function handleNext() {
       // Clear the timeout manually if it exists before advancing
-      if (timeoutRef.current) {
+      if (timeoutRef.current !== null) {
           clearTimeout(timeoutRef.current);
+          timeoutRef.current = null; // Clear the ref after use
       }
       onAnswer(1); 
   }
@@ -667,7 +668,6 @@ function App() {
     });
 
     // 2. Update Session Index and Navigation (only for formal sessions)
-    // Using functional update is safer, but rely on 'session' dependency for the initial check.
     if (session && !isPractice) {
         setSession((s) => {
             if (!s) return null;
@@ -821,7 +821,7 @@ function App() {
               total={session.totalCards}
             />
             <QuizScreen
-              key={session.index} // FIX: Ensures component re-mount and state reset
+              key={session.index} // Ensures component re-mount and state reset
               word={studyCard}
               vocabPool={studyVocabPool} 
               srsCard={currentSRSCard}
