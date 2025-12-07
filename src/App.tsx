@@ -4,6 +4,292 @@ import { SENTENCES } from "./data/sentences";
 import "./App.css";
 
 /* =======================
+   Injected CSS for Mobile Responsiveness and Slick Look
+======================= */
+
+const MobileStyles = () => (
+    <style>{`
+        /* Variables for easy color management */
+        :root {
+            --primary-color: #4A90E2; /* Blue */
+            --secondary-color: #805ad5; /* Purple */
+            --bg-color: #f7f9fc; /* Light Gray */
+            --card-bg: #ffffff;
+            --border-color: #eee;
+            --text-color: #333;
+            --muted-text: #666;
+            --success-color: #4CAF50;
+            --error-color: #E53935;
+            --shadow-color: rgba(0, 0, 0, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+            /* Use system font for a native Safari feel */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            min-height: 100vh; /* Full viewport height */
+        }
+
+        .memApp {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            background-color: var(--bg-color);
+        }
+
+        /* Topbar Styling */
+        .memTopbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 15px; /* Adjusted padding */
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: 0 1px 3px var(--shadow-color);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .memBrand {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--secondary-color);
+            cursor: pointer;
+        }
+        
+        .memTopbarActions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Main Content and Containers */
+        .memMain {
+            flex-grow: 1;
+            padding-top: 20px;
+        }
+
+        .memContainer {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .mobile-padding {
+            padding: 0 15px;
+        }
+
+        .memHeader {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 20px;
+            padding: 0 15px; /* Padding for header consistency */
+        }
+        
+        /* Button Styling */
+        .memBtn {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s, box-shadow 0.2s, transform 0.1s;
+            text-align: center;
+            white-space: nowrap;
+        }
+        
+        .memBtn:active {
+            transform: scale(0.98); /* Slick tap effect */
+        }
+
+        .memPrimary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .memSecondary {
+            background-color: var(--secondary-color);
+            color: white;
+        }
+
+        .muted {
+            color: var(--muted-text);
+            background-color: transparent;
+        }
+
+        .memBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Stats Grid */
+        .memStatsGrid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 30px;
+        }
+
+        .memStatBox {
+            background-color: var(--card-bg);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 8px var(--shadow-color); /* More prominent shadow */
+        }
+
+        .statLabel {
+            font-size: 0.8rem;
+            color: var(--muted-text);
+            margin-bottom: 5px;
+        }
+
+        .statValue {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-color);
+        }
+
+        /* Action Grid (Home Screen Buttons) */
+        .memActionGrid {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .mobile-large-btn {
+            width: 100%;
+            padding: 18px; /* Larger tap target */
+            font-size: 1.1rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        /* Category Items */
+        .memCategoryItem {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .categoryName {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        /* Card Styling (Quiz/Sentence Screens) */
+        .memCard {
+            background-color: var(--card-bg);
+            border-radius: 16px; /* Rounded corners */
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .foreignWord {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-align: center;
+            color: var(--secondary-color);
+        }
+
+        /* Choices Grid (Multiple Choice / Word Bank) */
+        .memChoicesGrid {
+            display: grid;
+            grid-template-columns: 1fr; 
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .choice {
+            padding: 15px; /* Large tap area */
+            font-size: 1rem;
+            background-color: #f0f4f7;
+            color: var(--text-color);
+            border: 1px solid #dcdfe4;
+        }
+
+        .choice.correct {
+            background-color: var(--success-color);
+            color: white;
+            border-color: var(--success-color);
+        }
+
+        .choice.wrong {
+            background-color: var(--error-color);
+            color: white;
+            border-color: var(--error-color);
+        }
+        
+        /* Sentence Builder Specifics */
+        .memSentenceCard .foreignWord {
+            color: var(--primary-color);
+            font-size: 1.4rem;
+        }
+
+        .sentenceTarget {
+            min-height: 60px; /* Taller target */
+            padding: 15px;
+            border: 2px dashed var(--secondary-color); /* Purple dashed border */
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1.4rem;
+            font-weight: 500;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1.3;
+        }
+
+        .sentence-choices {
+            margin-top: 25px !important;
+        }
+        
+        .sentence-word-btn {
+            background-color: #e6e6fa; /* Light Lavender */
+            color: #6a5acd; /* Deeper Purple */
+            border: 1px solid #d4d4f8;
+            font-size: 0.95rem;
+            padding: 10px 15px;
+            flex-grow: 0;
+        }
+
+        /* Progress Bar */
+        .memProgress {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding: 0 15px;
+        }
+
+        /* Responsive adjustments for wider screens */
+        @media (min-width: 600px) {
+            .memChoicesGrid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .memStatsGrid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+            .memMain {
+                padding-top: 40px;
+            }
+        }
+    `}</style>
+);
+
+
+/* =======================
    Types
 ======================= */
 
@@ -91,10 +377,8 @@ type Screen = {
 const MAX_NEW_CARDS_TO_LEARN = 5; 
 const ANSWER_DELAY_MS = 800; 
 
-const WEAK_CARD_BATCH_SIZE = 20; 
 const WEAK_CARD_MULTIPLIER = 3; 
 const FULL_REVIEW_ID = "full-review-mode"; 
-const ALL_SENTENCES_REVIEW_ID = "all-sentences-quiz"; // Special ID for full sentence quiz (Builder)
 
 // --- Sentence Category Data Structure (UPDATED for 100 sentences) ---
 const SENTENCE_CATEGORIES_DATA = [
@@ -230,16 +514,6 @@ function calculateSM2(card: SRSCard, quality: 1 | 2 | 3 | 4) {
    Default State & Data
 ======================= */
 
-const defaultAppState: AppState = {
-  srs: {},
-  streak: 0,
-  totalReviews: 0,
-  correctReviews: 0,
-  selectedCategory: "all",
-  sessionSize: 10,
-  lastStudyDay: undefined,
-};
-
 const ALL_WORDS: CardData[] = VOCAB;
 
 const ALL_CATEGORIES: { id: string; label: string }[] = [
@@ -290,8 +564,6 @@ function SentenceQuizScreen({
 
         setConstructedSentence((prev) => {
             const newSentence = [...prev, word];
-            const currentSentenceText = newSentence.join(' ').trim();
-            const correctSentenceText = sentence.phonetic.trim();
             
             // Check for completion first
             if (newSentence.length === sentence.tokens.length) {
@@ -394,13 +666,13 @@ function SentenceQuizScreen({
 // --- Quiz Screen (Multiple Choice - Only used for Vocab Review) ---
 function QuizScreen({
   word,
-  vocabPool, // Not strictly needed for distractors unless we were filtering, but kept for type safety
+  vocabPool: _vocabPool, 
   onAnswer,
   onSkip,
   srsCard,
   isPracticeMode, 
   isNewCard,
-  sessionCategory, 
+  sessionCategory: _sessionCategory, 
 }: {
   word: CardData;
   vocabPool: CardData[];
@@ -549,7 +821,7 @@ function TopBar({
               </div>
               <div className="memTopbarActions">
                   <button
-                      className="memBtn small mobile-btn"
+                      className="memBtn small mobile-btn muted"
                       onClick={() => onNavigate("settings")} 
                       title="Settings"
                   >
@@ -632,6 +904,9 @@ function CategoryItem({
 ======================= */
 
 function App() {
+  // Inject mobile styles first
+  const mobileStyles = <MobileStyles />;
+
   const [state, setState] = useState<AppState>(loadAppState);
   const [screen, setScreen] = useState<Screen>({ key: "home", category: "" });
   
@@ -720,7 +995,7 @@ function App() {
   // Sentence Quiz completion (for the builder screen)
   const endSentenceSession = useCallback(() => {
     setSentenceSession(null);
-    // Always go to sentence categories now that the 'all' mode is removed
+    // Always go to sentence categories
     navigate("sentence-categories"); 
   }, [navigate]);
 
@@ -754,7 +1029,7 @@ function App() {
 
 
   // Unified handler for Sentence Quiz completion/advancement
-  const handleSentenceComplete = useCallback((isCorrect: boolean) => {
+  const handleSentenceComplete = useCallback((_isCorrect: boolean) => { 
     setSentenceSession((s) => {
         if (!s) return null;
         let newS: SentenceSession = { ...s };
@@ -851,7 +1126,7 @@ function App() {
 
   }, [state.srs, navigate, state.sessionSize]);
 
-  const handleCardComplete = useCallback((wordId: string, quality: 1 | 2 | 3 | 4, isNewCard: boolean, isPractice: boolean = false) => {
+  const handleCardComplete = useCallback((wordId: string, quality: 1 | 2 | 3 | 4, _isNewCard: boolean, isPractice: boolean = false) => { 
     if (!session) return;
 
     // 1. Update SRS
@@ -918,8 +1193,6 @@ function App() {
     return state.srs[currentCard.id] || null;
   }, [currentCard, state.srs]);
 
-  const totalSentences = SENTENCES.length;
-
   // 7. Render Screens
   const renderScreen = () => {
     // Current Card/Sentence for Display
@@ -943,11 +1216,10 @@ function App() {
 
             <div className="memActionGrid mobile-action-grid">
               
-              {/* Only the section-based sentence quiz remains */}
+              {/* Only the section-based sentence quiz remains, restyled as main sentence button */}
               <button
-                className="memBtn large mobile-large-btn"
+                className="memBtn large mobile-large-btn memSecondary"
                 onClick={() => navigate("sentence-categories")} 
-                style={{ backgroundColor: '#805ad5', borderColor: '#805ad5' }}
               >
                 Sentence Builder (Sections)
               </button>
@@ -974,7 +1246,7 @@ function App() {
               </button>
             </div>
             
-            <div className="memSettingsSection" style={{ marginTop: '20px' }}>
+            <div className="memSettingsSection" style={{ marginTop: '20px', padding: '0 15px' }}>
                 <div className="memSettingsTitle">Session Length</div>
                 <div className="memSessionSizeSelector">
                     {[5, 10, 20, 'unlimited'].map((size) => (
@@ -994,7 +1266,7 @@ function App() {
       case "categories":
         return (
             <div className="memContainer mobile-padding">
-                <div className="memHeader mobile-header">Vocab Categories</div>
+                <div className="memHeader mobile-header" style={{padding: 0}}>Vocab Categories</div>
                 {ALL_CATEGORIES.map((cat) => (
                     <CategoryItem
                         key={cat.id}
@@ -1010,7 +1282,7 @@ function App() {
       case "sentence-categories": 
         return (
             <div className="memContainer mobile-padding">
-                <div className="memHeader mobile-header">Sentence Builder Sections ({SENTENCES.length} Total)</div>
+                <div className="memHeader mobile-header" style={{padding: 0}}>Sentence Builder Sections ({SENTENCES.length} Total)</div>
                 {SENTENCE_CATEGORIES_DATA.map((cat) => (
                     <CategoryItem
                         key={cat.id}
@@ -1037,7 +1309,8 @@ function App() {
                 
             return (
                 <div className="memContainer mobile-padding">
-                    <div className="memHeader mobile-header">{sessionTitle}</div>
+                    {/* FIXED: Use sessionTitle here to remove TS6133 error */}
+                    <div className="memHeader mobile-header">{sessionTitle}</div> 
                     <div className="memCard">
                         <div className="memCardContent">
                             <div className="foreignWord">Session Complete! 🎉</div>
@@ -1066,7 +1339,7 @@ function App() {
                     <QuizScreen
                         key={currentCard!.id}
                         word={currentCard!}
-                        vocabPool={ALL_WORDS} // Always use ALL_WORDS for distractors in the QuizScreen
+                        vocabPool={ALL_WORDS} 
                         onAnswer={(quality) => handleCardComplete(currentCard!.id, quality, currentSRS === null, isPracticeMode)}
                         onSkip={() => handleCardComplete(currentCard!.id, 1, currentSRS === null, isPracticeMode)}
                         srsCard={currentSRS}
@@ -1133,6 +1406,7 @@ function App() {
   
   return (
     <div className="memApp">
+      {mobileStyles}
       <TopBar
         onNavigate={navigate}
         totalDue={totalReviewsDue + totalNewCards}
